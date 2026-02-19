@@ -1,32 +1,30 @@
-# Chat Snapshot — Katerina AI Twin (as of 2026-02-19)
+# Chat Snapshot — Katerina AI Twin (Context Freeze)
 
-## Goal
-Build personal AI Twin (Life OS). Start with Career OS v0.1.
+## Big idea (do not lose)
+We are building a full personal AI Twin OS, not just a vacancy bot.
+Telegram is the fast operator interface (control plane).
+Web UI is the analytics workspace (daily/weekly decision-making).
+Data sources include HH.ru (primary funnel) and Telegram channels (secondary), later others.
 
-## Interaction model
-- Telegram = speed: commands, approvals, notifications
-- Web UI = beauty + analytics: daily/weekly reviews, funnel, market trends, CV+learning gaps
+## What is already implemented
+- Repo scaffold: capabilities/career_os/skills + core/connectors/memory/tests
+- Claude Code integration via skills symlink
+- PR-1 done & pushed: SQLite foundation (job_raw/events/actions/policy) + init_db()
+- PR-2 done & pushed: Telegram bot ingest + dedup + emits vacancy.ingested
+- Local manual test confirmed: forwarding posts saves to SQLite and dedup works
 
-## v0.1 core loop
-Forward TG vacancy -> ingest -> store raw -> score 0..10 -> policy -> notify/approve.
+## Current product rules
+Score 0..10:
+- <5 ignore
+- 5..7 auto-flow (daily limit default 40)
+- >7 approval + cover package
+Anti-duplicates required.
 
-## Scoring & policy
-- Score scale: 0..10
-- <5: do nothing
-- 5–7: auto-send candidate (limit 40/day, configurable)
-- >7: generate cover package -> user approval
-- anti-duplicates required
+## Sources roadmap
+- v0.1: Telegram forward + HH ingestion minimal (from user-provided saved search URLs)
+- v0.2+: better HH automation + optional direct TG channel ingestion
+- v1.0: unified multi-source pipeline + web analytics
 
-## Architecture decisions
-- Capability-driven + Skills
-- Modular monolith core
-- SQLite first
-- Events + Actions log
-- Hybrid execution: scheduled + manual
-- User-facing RU, internal EN
-
-## Dev process (AI team)
-- 1 change = 1 PR
-- No overengineering
-- Tests/fixtures early
-- DECISIONS.md is source of truth
+## Where we are right now (next step)
+Start PR-3: match_scoring (heuristic, no LLM) + tests + memory/profile.json.
+Then PR-4 apply_policy, PR-5 Telegram approvals, PR-6 HH ingest v0.1.
