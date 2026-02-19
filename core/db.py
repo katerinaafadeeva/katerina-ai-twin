@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS policy (
     threshold_high  INTEGER DEFAULT 7,
     daily_limit     INTEGER DEFAULT 40
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_job_raw_dedup
+    ON job_raw (source, source_message_id);
 """
 
 
