@@ -117,27 +117,27 @@ from core.llm.schemas import ScoringOutput, ScoreReason
 
 def test_valid_scoring_output():
     output = ScoringOutput(
-        score=75,
+        score=7,
         reasons=[ScoreReason(criterion="role_match", matched=True, note="PM role")],
         explanation="Хорошее совпадение по роли и навыкам."
     )
-    assert output.score == 75
+    assert output.score == 7
 
 def test_score_below_zero_rejected():
     with pytest.raises(Exception):
         ScoringOutput(score=-1, reasons=[ScoreReason(criterion="x", matched=False, note="x")], explanation="Test text here")
 
-def test_score_above_100_rejected():
+def test_score_above_10_rejected():
     with pytest.raises(Exception):
-        ScoringOutput(score=101, reasons=[ScoreReason(criterion="x", matched=False, note="x")], explanation="Test text here")
+        ScoringOutput(score=11, reasons=[ScoreReason(criterion="x", matched=False, note="x")], explanation="Test text here")
 
 def test_empty_reasons_rejected():
     with pytest.raises(Exception):
-        ScoringOutput(score=50, reasons=[], explanation="Test explanation")
+        ScoringOutput(score=5, reasons=[], explanation="Test explanation")
 
 def test_short_explanation_rejected():
     with pytest.raises(Exception):
-        ScoringOutput(score=50, reasons=[ScoreReason(criterion="x", matched=False, note="x")], explanation="Short")
+        ScoringOutput(score=5, reasons=[ScoreReason(criterion="x", matched=False, note="x")], explanation="Short")
 ```
 
 ### 5. `tests/test_sanitize.py`
@@ -203,7 +203,7 @@ def _insert_vacancy(conn, raw_text="test vacancy", source="test", msg_id="test_1
     conn.commit()
     return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-def _make_result(score=75):
+def _make_result(score=7):
     return ScoringOutput(
         score=score,
         reasons=[ScoreReason(criterion="role_match", matched=True, note="PM role")],
@@ -238,12 +238,12 @@ def test_save_score_idempotent(db):
 
 def test_get_score_returns_data(db):
     job_id = _insert_vacancy(db)
-    result = _make_result(73)
+    result = _make_result(7)
     save_score(db, job_id, result, "hash", "haiku", "v1", 100, 50, 0.001)
     db.commit()
     stored = get_score(db, job_id)
     assert stored is not None
-    assert stored["score"] == 73
+    assert stored["score"] == 7
 
 def test_get_score_returns_none_if_not_scored(db):
     job_id = _insert_vacancy(db)
