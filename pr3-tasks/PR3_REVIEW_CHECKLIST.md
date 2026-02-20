@@ -3,7 +3,7 @@
 ## Pre-merge final review
 
 ### Architecture compliance
-- [ ] Score contract matches ADR-001 (0-100 INTEGER, thresholds 50/70)
+- [ ] Score contract matches ADR-001 (0-10 INTEGER, thresholds 5/7)
 - [ ] Worker pattern matches ADR-003 (async in-process, not inline)
 - [ ] LLM security matches ADR-004 (sanitization, redaction, validation, audit)
 - [ ] Module boundaries respected (llm/ doesn't import career_os/, etc.)
@@ -16,10 +16,10 @@
 - [ ] All events have correlation_id for tracing
 
 ### Score contract
-- [ ] Score stored as INTEGER 0-100
-- [ ] Display as X.X/10
-- [ ] Thresholds: <50 ignore, 50-70 auto, >70 approval
-- [ ] Emoji: 🔴 <50, 🟡 50-69, 🟢 ≥70
+- [ ] Score stored as INTEGER 0-10
+- [ ] Display as X/10 (no division — score IS the display value)
+- [ ] Thresholds: <5 ignore, 5-7 auto, >7 approval
+- [ ] Emoji: 🔴 <5, 🟡 5-6, 🟢 ≥7
 - [ ] Idempotent: UNIQUE(job_raw_id, scorer_version)
 
 ### Telegram UX

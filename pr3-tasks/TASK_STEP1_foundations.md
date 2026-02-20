@@ -96,7 +96,7 @@ Create `core/migrations/` directory with:
 CREATE TABLE IF NOT EXISTS job_scores (
     id              INTEGER PRIMARY KEY,
     job_raw_id      INTEGER NOT NULL REFERENCES job_raw(id),
-    score           INTEGER NOT NULL CHECK(score BETWEEN 0 AND 100),
+    score           INTEGER NOT NULL CHECK(score BETWEEN 0 AND 10),
     reasons_json    TEXT NOT NULL,
     explanation     TEXT NOT NULL,
     model           TEXT NOT NULL,
@@ -117,10 +117,6 @@ ALTER TABLE events ADD COLUMN actor TEXT DEFAULT 'system';
 ALTER TABLE events ADD COLUMN correlation_id TEXT;
 ```
 
-**`core/migrations/004_policy_scale.sql`**:
-```sql
-UPDATE policy SET threshold_low = 50, threshold_high = 70 WHERE id = 1;
-```
 
 ### 4. Update `core/db.py`
 
@@ -192,7 +188,7 @@ feat(core): add migrations system, config module, security baseline
 - 001: extract existing DDL
 - 002: job_scores table
 - 003: events actor/correlation_id
-- 004: policy threshold scale to 0-100
+- policy defaults (threshold_low=5, threshold_high=7) already correct in 001_initial.sql
 - Updated db.py to use migrations
 - Updated events.py with actor/correlation_id
 - Updated .env.example, .gitignore, requirements.txt

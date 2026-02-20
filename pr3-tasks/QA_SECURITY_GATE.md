@@ -58,7 +58,7 @@ Read ALL files created/modified in PR-3:
 
 ### Testing
 - [ ] All tests pass: `pytest -v`
-- [ ] Schema validation: rejects score < 0, > 100, empty reasons, short explanation
+- [ ] Schema validation: rejects score < 0 or > 10 (overflow 11+/100 rejected), empty reasons, short explanation
 - [ ] Sanitization: removes zero-width, control chars; preserves newlines; truncates
 - [ ] PII redaction: no exact salary in LLM-bound profile
 - [ ] Store: idempotent save, unscored query, score retrieval
