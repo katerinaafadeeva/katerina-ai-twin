@@ -15,7 +15,7 @@ You are the Implementation Agent. Final step.
 ### Done
 - PR-1: SQLite foundation (job_raw/events/actions/policy) + init_db
 - PR-2: Telegram ingest + dedup + event emission; tested end-to-end
-- PR-3: LLM-assisted scoring (0-100) + async worker + security baseline + tests
+- PR-3: LLM-assisted scoring (0-10) + async worker + security baseline + tests
 
 ### Next (execution order)
 - PR-4: apply_policy (limits + anti-duplicates + actions log)
@@ -24,7 +24,7 @@ You are the Implementation Agent. Final step.
 - PR-7: Data normalization (job_parsed table)
 
 ### Notes
-- Score contract: 0-100 INTEGER, display X.X/10. See ADR-001.
+- Score contract: 0-10 INTEGER, display X/10. See ADR-001.
 - LLM: Claude Haiku for scoring, audit logged. See ADR-002.
 - Architecture docs in architecture/adr/ and architecture/governance/.
 ```
@@ -35,9 +35,9 @@ Add to end:
 
 ```markdown
 ## Score Contract (ADR-001)
-- Range: 0-100 INTEGER (display as X.X/10)
-- Thresholds: <50 ignore, 50-70 auto-queue, >70 approval required
-- Boundaries: inclusive for auto (50 and 70 in auto range), >70 strict
+- Range: 0-10 INTEGER (display as X/10 — no division)
+- Thresholds: <5 ignore, 5-7 auto-queue, >7 approval required
+- Boundaries: inclusive for auto (5 and 7 in auto range), >7 strict
 - See architecture/adr/ADR-001-score-contract.md
 
 ## LLM-Assisted Scoring (ADR-002)
@@ -60,7 +60,7 @@ Add to end:
 ## PR-3: LLM-Assisted Scoring (2026-02-20)
 
 ### Added
-- LLM-assisted vacancy scoring (0-100 scale) with Claude Haiku
+- LLM-assisted vacancy scoring (0-10 scale) with Claude Haiku
 - Async scoring worker (in-process, event-driven polling)
 - Score persistence (job_scores table, idempotent)
 - LLM client abstraction with audit logging (tokens, cost, model)
@@ -80,7 +80,7 @@ Add to end:
 - Telegram bot: auth check on all handlers
 - Telegram bot: scoring decoupled to worker (second message)
 - Events: added actor and correlation_id fields
-- Policy thresholds scaled to 0-100
+- Policy thresholds: defaults 5/7 (already correct in 001_initial.sql, no migration needed)
 
 ## PR-2: Telegram Ingest (2026-02-19)
 - Telegram bot polling + vacancy_ingest_telegram

@@ -1,20 +1,14 @@
 import asyncio
-import os
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, MessageOriginChannel
 
+from core.config import config
 from core.db import init_db
 from core.security import is_authorized
 from capabilities.career_os.skills.vacancy_ingest_telegram.handler import ingest
 from capabilities.career_os.skills.match_scoring.worker import scoring_worker
-
-BOT_TOKEN = os.environ["BOT_TOKEN"]
 
 dp = Dispatcher()
 
@@ -57,7 +51,7 @@ async def handle_forward(message: Message) -> None:
 
 async def main() -> None:
     init_db()
-    bot = Bot(token=BOT_TOKEN)
+    bot = Bot(token=config.bot_token)
     asyncio.create_task(scoring_worker(bot))
     await dp.start_polling(bot)
 
