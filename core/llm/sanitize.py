@@ -47,7 +47,13 @@ def sanitize_for_llm(text: str, max_chars: int = 2000) -> str:
     """
     text = _ZERO_WIDTH_RE.sub("", text)
     text = _CONTROL_RE.sub("", text)
+    orig_len = len(text)
     text = text[:max_chars]
+    if orig_len > max_chars:
+        logger.info(
+            "sanitize_for_llm: text truncated",
+            extra={"orig_len": orig_len, "max_chars": max_chars},
+        )
     text = _EXCESS_NEWLINES_RE.sub("\n\n", text)
     return text.strip()
 
@@ -74,10 +80,15 @@ def prepare_profile_for_llm(profile: Any) -> dict:
         if value is not None:
             result[field] = value
 
-    # Salary: signal only — exact figure is redacted
-    salary_min = getattr(profile, "salary_min", None)
+    # Salary: signal only — exact figure is NEVER included.
+    # Try nested (profile.salary.min) first, fallback to flat (profile.salary_min).
+    salary_obj = getattr(profile, "salary", None)
+    salary_min = getattr(salary_obj, "min", None) if salary_obj else None
+    if salary_min is None:
+        salary_min = getattr(profile, "salary_min", None)
     result["salary_signal"] = (
-        "has_minimum_threshold" if salary_min else "no_minimum_specified"
+        "has_minimum_threshold" if salary_min is not None and salary_min > 0
+        else "no_minimum_specified"
     )
 
     return result
