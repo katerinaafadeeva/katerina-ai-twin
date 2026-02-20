@@ -86,12 +86,39 @@ Internal code/identifiers/DB: English.
   - aggregated weekly market analysis (sampled data) — Milestone M2
 - Caching and minimal context injection mandatory.
 
-## PR-3 Decisions (LLM-Assisted Scoring)
-- Score contract: 0-10 INTEGER (display as X/10). Stored in job_scores. See ADR-001.
-- LLM model: Claude Haiku (cheapest), fallback to Sonnet. See ADR-002.
-- Security: sanitization + PII redaction + prompt injection defense + Pydantic validation.
-- Worker pattern: async background task, not inline in Telegram handler. See ADR-003.
-- Profile: identity/profile.json (gitignored); falls back to profile.example.json with WARNING.
+## PR-3 Decisions (2026-02-20)
+
+### Scoring scale: 0–10 (not 0–100)
+Score is stored and displayed as INTEGER 0–10 with no conversion layer.
+Previous 0–100 proposal rejected as unnecessarily complex (see ADR-001).
+Thresholds: `threshold_low = 5` (auto-queue/apply), `threshold_high = 7` (approval required, 7 included).
+Emoji mapping: 🟢 ≥7 · 🟡 5–6 · 🔴 <5.
+
+### LLM-assisted scoring (not heuristic-only)
+PR-3 adds Claude Haiku as the primary scorer.
+Retry once with Claude Sonnet on any failure.
+Decision justified by: structured output reliability, Russian-language explanation quality.
+Heuristic pre-filter (negative_signals, excluded_industries) remains on the prompt level.
+
+### Worker pattern (not inline scoring)
+Scoring runs in a background asyncio.Task, not inline in the Telegram handler.
+Telegram handler returns "Сохранено" immediately; scoring notification arrives as a second message.
+Rationale: LLM calls take 1–5 s; blocking the handler degrades UX and risks timeout.
+
+### LLM output validation: strict Pydantic schema
+Every LLM response is parsed and validated before persisting.
+`ScoringOutput`: score int 0–10, reasons list (min 1 item), explanation str (10–500 chars, Russian).
+Invalid output → retry with fallback model → skip + log if still fails.
+
+### PII redaction: salary_signal only
+Exact salary figure (`salary_min`) is never sent to the LLM.
+Replaced with `salary_signal = "has_minimum_threshold" | "no_minimum_specified"`.
+All other profile fields use an explicit allowlist in `prepare_profile_for_llm()`.
+
+### Auth: Telegram whitelist enforced at handler level
+`is_authorized()` called as the first statement in every Telegram handler.
+Empty `ALLOWED_TELEGRAM_IDS` = dev mode (all users allowed, WARNING logged).
+Production deployments must set `ALLOWED_TELEGRAM_IDS` in `.env`.
 
 ## PR-4 Decisions (Policy Engine)
 - Action types (Founder contract):
@@ -102,5 +129,6 @@ Internal code/identifiers/DB: English.
   - APPROVAL_REQUIRED: score >= 7 (7 included, not only 8+) — never blocked by daily limit
 - Daily limit counts AUTO_QUEUE + AUTO_APPLY both (not only AUTO_APPLY).
 - Policy engine is inline in scoring worker (not a separate asyncio task): deterministic, <1ms.
-- HOLD summary: tracked via policy.hold_summary event in events table, sent once per UTC day.
+- HOLD summary: emit(policy.hold_summary) BEFORE send_message for durability (dedup marker survives Telegram failures).
+- HOLD summary tracking: via policy.hold_summary event in events table, sent once per UTC day.
 - Migration 004: ALTER TABLE only (non-destructive), adds score/reason/actor/correlation_id to actions.

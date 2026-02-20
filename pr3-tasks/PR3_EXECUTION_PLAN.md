@@ -235,8 +235,8 @@ async def scoring_worker(bot: Bot, config: Config, interval: int = 10):
 
 **Key test cases:**
 ```
-test_high_match_vacancy_scores_above_70
-test_low_match_vacancy_scores_below_50
+test_high_match_vacancy_scores_above_7
+test_low_match_vacancy_scores_below_5
 test_negative_signals_reduce_score
 test_scoring_is_idempotent (save twice → one record)
 test_sanitize_removes_zero_width_chars
