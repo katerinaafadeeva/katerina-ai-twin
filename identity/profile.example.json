@@ -1,0 +1,21 @@
+{
+  "version": "1.0",
+  "updated_at": "YYYY-MM-DD",
+  "target_roles": ["Product Manager", "Product Owner", "Business Development Manager"],
+  "target_seniority": ["middle", "senior"],
+  "work_format": ["remote", "hybrid"],
+  "geo_preferences": {
+    "cities": ["Москва", "remote"],
+    "relocation": false
+  },
+  "salary": {
+    "min": 0,
+    "currency": "RUB"
+  },
+  "required_skills": ["product management", "analytics", "stakeholder management", "roadmap"],
+  "bonus_skills": ["SQL", "Jira", "Figma", "Python", "data analysis"],
+  "negative_signals": ["cold calling", "MLM", "network marketing", "unpaid internship", "бесплатная стажировка"],
+  "industries_preferred": ["tech", "fintech", "edtech", "SaaS"],
+  "industries_excluded": ["gambling", "tobacco", "adult"],
+  "languages": ["Russian", "English"]
+}

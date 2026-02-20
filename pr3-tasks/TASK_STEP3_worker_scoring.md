@@ -72,7 +72,7 @@ description: LLM-assisted vacancy scoring with structured output
 - Profile (from identity/profile.json)
 
 ## Output
-- score: 0–100 (INTEGER)
+- score: 0–10 (INTEGER)
 - reasons: [{criterion, matched, note}]
 - explanation: 1-2 sentences in Russian
 
@@ -151,9 +151,9 @@ logger = logging.getLogger(__name__)
 
 
 def _score_emoji(score: int) -> str:
-    if score >= 70:
+    if score >= 7:
         return "🟢"
-    elif score >= 50:
+    elif score >= 5:
         return "🟡"
     return "🔴"
 
@@ -201,10 +201,9 @@ async def scoring_worker(bot: Bot) -> None:
                     if config.allowed_telegram_ids:
                         chat_id = config.allowed_telegram_ids[0]
                         emoji = _score_emoji(result.score)
-                        display_score = f"{result.score / 10:.1f}"
                         await bot.send_message(
                             chat_id,
-                            f"Оценка #{job_raw_id}: {emoji} {display_score}/10\n{result.explanation}"
+                            f"Оценка #{job_raw_id}: {emoji} {result.score}/10\n{result.explanation}"
                         )
 
                 except Exception:
