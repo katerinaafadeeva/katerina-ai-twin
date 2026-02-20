@@ -22,16 +22,17 @@ Minimize cognitive load and maximize relevance: user sees only high-quality oppo
 ## Milestone M1 — Unified Career Pipeline (Telegram control, multi-source data)
 Goal: HH + TG feed into one pipeline with scoring, policy and approvals.
 
-### PR-3 Match Scoring (NEXT)
-- match_scoring SKILL.md
-- heuristic scorer 0..10 + reasons + extracted fields
-- profile stored in memory/profile.json
-- fixtures + unit tests
+### PR-3 Match Scoring (DONE)
+- LLM-assisted scoring 0-10 (Claude Haiku) + async worker + 41 tests
+- Security: sanitization, PII redaction, prompt injection defense, Pydantic validation
+- Config module, migration system, profile model (profile.example.json)
 
-### PR-4 Apply Policy + Actions (NEXT)
-- apply_policy SKILL.md
-- daily limit (40 default), anti-duplicates policy
-- write actions log (queued/auto/approved/rejected)
+### PR-4 Apply Policy + Actions (DONE)
+- Deterministic policy engine: IGNORE/AUTO_QUEUE/AUTO_APPLY/HOLD/APPROVAL_REQUIRED
+- Daily limit (40 default), counts AUTO_QUEUE + AUTO_APPLY both
+- Actions log with score/reason/actor/correlation_id (migration 004)
+- HOLD daily summary notification (once per UTC day)
+- 54 new tests (95 total)
 
 ### PR-5 Telegram Approval UX (NEXT)
 - approval queue in Telegram:

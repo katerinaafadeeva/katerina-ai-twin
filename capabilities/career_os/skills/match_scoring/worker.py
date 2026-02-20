@@ -1,7 +1,7 @@
 """Async background worker for match_scoring skill.
 
 Polls for unscored vacancies, scores them via LLM, persists results,
-emits events, and sends Telegram notifications.
+evaluates policy, records actions, emits events, and sends Telegram notifications.
 """
 
 import asyncio
@@ -11,6 +11,14 @@ from uuid import uuid4
 from aiogram import Bot
 
 from capabilities.career_os.models import Profile
+from capabilities.career_os.skills.apply_policy.engine import ActionType, evaluate_policy
+from capabilities.career_os.skills.apply_policy.store import (
+    get_policy,
+    get_today_auto_count,
+    get_today_hold_count,
+    save_action,
+    was_hold_notification_sent_today,
+)
 from capabilities.career_os.skills.match_scoring.handler import score_vacancy_llm
 from capabilities.career_os.skills.match_scoring.store import (
     get_unscored_vacancies,
@@ -29,7 +37,7 @@ def _score_emoji(score: int) -> str:
 
     Thresholds match ADR-001:
     - >= 7 → green (APPROVAL_REQUIRED)
-    - >= 5 → yellow (AUTO_QUEUE)
+    - >= 5 → yellow (AUTO_QUEUE/AUTO_APPLY)
     - < 5  → red (IGNORE)
 
     Args:
@@ -46,18 +54,17 @@ def _score_emoji(score: int) -> str:
 
 
 async def scoring_worker(bot: Bot) -> None:
-    """Background worker: polls for unscored vacancies and scores them via LLM.
+    """Background worker: polls for unscored vacancies, scores them, and applies policy.
 
     Runs in an infinite loop. On each iteration:
     1. Fetches all unscored vacancies from job_raw (LEFT JOIN job_scores).
-    2. For each vacancy: scores via LLM, persists result, emits event,
-       sends Telegram notification.
-    3. Per-vacancy errors are caught and logged; the loop continues.
-    4. Loop-level errors are caught and logged; the worker sleeps and retries.
-
-    Tokens and cost are tracked via the ``llm.call`` event emitted inside
-    call_llm_scoring(). The model field in job_scores records that the actual
-    model is captured in the audit event (not duplicated here).
+    2. For each vacancy: scores via LLM, persists result, emits vacancy.scored.
+    3. Evaluates apply_policy: saves action, emits vacancy.policy_applied,
+       sends notification based on action type (IGNORE/HOLD are silent per-vacancy).
+    4. After processing all vacancies: sends one HOLD summary if any HOLDs exist today
+       and the summary was not yet sent.
+    5. Per-vacancy errors are caught and logged; the loop continues.
+    6. Loop-level errors are caught and logged; the worker sleeps and retries.
 
     Args:
         bot: aiogram Bot instance (shared with the Telegram handler).
@@ -95,13 +102,11 @@ async def scoring_worker(bot: Bot) -> None:
                             job_raw_id,
                             result,
                             profile_hash=profile.content_hash(),
-                            # Actual model is logged in the llm.call audit event;
-                            # this field records that the score came from the LLM path.
                             model="llm_call",
                             prompt_version=PROMPT_VERSION,
-                            input_tokens=0,   # tracked in llm.call event
-                            output_tokens=0,  # tracked in llm.call event
-                            cost_usd=0.0,     # tracked in llm.call event
+                            input_tokens=0,
+                            output_tokens=0,
+                            cost_usd=0.0,
                         )
                         conn.commit()
 
@@ -112,20 +117,105 @@ async def scoring_worker(bot: Bot) -> None:
                         correlation_id=correlation_id,
                     )
 
+                    # --- Policy evaluation ---
+                    with get_conn() as conn:
+                        policy = get_policy(conn)
+                        today_auto_count = get_today_auto_count(conn)
+
+                    decision = evaluate_policy(
+                        score=result.score,
+                        source=vacancy["source"] or "",
+                        threshold_low=policy["threshold_low"],
+                        threshold_high=policy["threshold_high"],
+                        daily_limit=policy["daily_limit"],
+                        today_auto_count=today_auto_count,
+                    )
+
+                    with get_conn() as conn:
+                        save_action(
+                            conn,
+                            job_raw_id,
+                            decision,
+                            score=result.score,
+                            correlation_id=correlation_id,
+                        )
+                        conn.commit()
+
+                    emit(
+                        "vacancy.policy_applied",
+                        {
+                            "job_raw_id": job_raw_id,
+                            "action_type": decision.action_type.value,
+                            "score": result.score,
+                        },
+                        actor="policy_engine",
+                        correlation_id=correlation_id,
+                    )
+
+                    # --- Telegram notification (per action type) ---
                     if config.allowed_telegram_ids:
                         chat_id = config.allowed_telegram_ids[0]
                         emoji = _score_emoji(result.score)
-                        await bot.send_message(
-                            chat_id,
-                            f"Оценка #{job_raw_id}: {emoji} {result.score}/10\n"
-                            f"{result.explanation}",
-                        )
+
+                        if decision.action_type == ActionType.IGNORE:
+                            pass  # silent — no notification
+
+                        elif decision.action_type == ActionType.AUTO_APPLY:
+                            await bot.send_message(
+                                chat_id,
+                                f"{emoji} Автоотклик HH #{job_raw_id}: {result.score}/10\n"
+                                f"{decision.reason}",
+                            )
+
+                        elif decision.action_type == ActionType.AUTO_QUEUE:
+                            await bot.send_message(
+                                chat_id,
+                                f"{emoji} В очередь #{job_raw_id}: {result.score}/10\n"
+                                f"{decision.reason}",
+                            )
+
+                        elif decision.action_type == ActionType.APPROVAL_REQUIRED:
+                            await bot.send_message(
+                                chat_id,
+                                f"{emoji} Требует одобрения #{job_raw_id}: {result.score}/10\n"
+                                f"{decision.reason}\n"
+                                f"{result.explanation}",
+                            )
+
+                        elif decision.action_type == ActionType.HOLD:
+                            pass  # silent per-vacancy — one daily summary sent below
 
                 except Exception:
                     logger.exception(
-                        "Scoring failed for vacancy",
+                        "Scoring/policy failed for vacancy",
                         extra={"job_raw_id": job_raw_id},
                     )
+
+            # --- HOLD daily summary (once per UTC day) ---
+            # Ordering: emit FIRST (persistence), then send_message.
+            # Rationale: if send_message fails after emit, dedup marker is recorded →
+            # next cycle skips (missed notification). If send_message succeeded first and
+            # emit failed → dedup marker lost → duplicate notification next cycle.
+            # For a personal system, missing one summary < sending duplicates every cycle.
+            if config.allowed_telegram_ids:
+                try:
+                    with get_conn() as conn:
+                        hold_count = get_today_hold_count(conn)
+                        already_sent = was_hold_notification_sent_today(conn)
+
+                    if hold_count > 0 and not already_sent:
+                        emit(
+                            "policy.hold_summary",
+                            {"hold_count": hold_count},
+                            actor="policy_engine",
+                        )
+                        chat_id = config.allowed_telegram_ids[0]
+                        await bot.send_message(
+                            chat_id,
+                            f"⏸ Сегодня на удержании: {hold_count} вакансий — дневной лимит исчерпан.",
+                        )
+                except Exception:
+                    logger.exception("HOLD summary notification failed")
 
         except Exception:
             logger.exception("Worker loop error")

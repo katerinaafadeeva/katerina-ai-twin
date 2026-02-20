@@ -57,11 +57,13 @@ ingest (HH/TG/other) -> normalize -> dedup -> score (0..10) -> apply_policy -> q
 
 ## Scoring & Policy (Career OS)
 Score scale: 0..10.
-- score < 5: ignore
-- 5 <= score <= 7: auto-send candidate (within daily cap)
-- score > 7: generate application package (CV variant + cover) -> approval required
+- score < 5: IGNORE (silent, no notification)
+- score 5-6, source=hh, within limit: AUTO_APPLY
+- score 5-6, other source, within limit: AUTO_QUEUE
+- score 5-6, daily limit reached: HOLD (one summary notification/day)
+- score >= 7 (7 included): APPROVAL_REQUIRED (never blocked by daily limit)
 Guardrails:
-- daily auto-send limit: default 40 (configurable)
+- daily auto-send limit: default 40 (counts AUTO_QUEUE + AUTO_APPLY both)
 - anti-duplicates: do not apply twice to same company/role; do not ingest duplicates
 
 ## Analytics Requirements (Web UI)
@@ -77,8 +79,28 @@ User-facing: Russian.
 Internal code/identifiers/DB: English.
 
 ## Cost Controls (Token Budget)
-- No LLM for deterministic parts: ingestion, dedup, scoring heuristics, policy, counters.
-- LLM allowed only for high-value outputs:
-  - cover letters for score > 7
-  - aggregated weekly market analysis (sampled data)
+- No LLM for deterministic parts: ingestion, dedup, policy, counters.
+- LLM allowed for:
+  - vacancy scoring (Claude Haiku, audit logged) — approved since PR-3
+  - cover letters for score >= 7 — planned PR-5
+  - aggregated weekly market analysis (sampled data) — Milestone M2
 - Caching and minimal context injection mandatory.
+
+## PR-3 Decisions (LLM-Assisted Scoring)
+- Score contract: 0-10 INTEGER (display as X/10). Stored in job_scores. See ADR-001.
+- LLM model: Claude Haiku (cheapest), fallback to Sonnet. See ADR-002.
+- Security: sanitization + PII redaction + prompt injection defense + Pydantic validation.
+- Worker pattern: async background task, not inline in Telegram handler. See ADR-003.
+- Profile: identity/profile.json (gitignored); falls back to profile.example.json with WARNING.
+
+## PR-4 Decisions (Policy Engine)
+- Action types (Founder contract):
+  - IGNORE: score < 5 — silent, no notification
+  - AUTO_QUEUE: score 5-6, non-hh source, within daily limit
+  - AUTO_APPLY: score 5-6, source='hh', within daily limit
+  - HOLD: score 5-6, daily limit reached — one summary notification/day, not per-vacancy
+  - APPROVAL_REQUIRED: score >= 7 (7 included, not only 8+) — never blocked by daily limit
+- Daily limit counts AUTO_QUEUE + AUTO_APPLY both (not only AUTO_APPLY).
+- Policy engine is inline in scoring worker (not a separate asyncio task): deterministic, <1ms.
+- HOLD summary: tracked via policy.hold_summary event in events table, sent once per UTC day.
+- Migration 004: ALTER TABLE only (non-destructive), adds score/reason/actor/correlation_id to actions.
