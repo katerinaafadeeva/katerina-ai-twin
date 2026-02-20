@@ -10,7 +10,9 @@ from aiogram.filters import Command
 from aiogram.types import Message, MessageOriginChannel
 
 from core.db import init_db
+from core.security import is_authorized
 from capabilities.career_os.skills.vacancy_ingest_telegram.handler import ingest
+from capabilities.career_os.skills.match_scoring.worker import scoring_worker
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
@@ -19,6 +21,8 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message) -> None:
+    if not is_authorized(message):
+        return
     await message.answer(
         "Привет! Перешли мне пост с вакансией, и я её сохраню."
     )
@@ -26,6 +30,8 @@ async def cmd_start(message: Message) -> None:
 
 @dp.message(F.forward_origin)
 async def handle_forward(message: Message) -> None:
+    if not is_authorized(message):
+        return
     raw_text = message.text or message.caption
     if not raw_text:
         await message.answer("Не удалось прочитать текст поста.")
@@ -52,6 +58,7 @@ async def handle_forward(message: Message) -> None:
 async def main() -> None:
     init_db()
     bot = Bot(token=BOT_TOKEN)
+    asyncio.create_task(scoring_worker(bot))
     await dp.start_polling(bot)
 
 

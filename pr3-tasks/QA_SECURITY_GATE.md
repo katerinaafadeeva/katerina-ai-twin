@@ -54,7 +54,7 @@ Read ALL files created/modified in PR-3:
 - [ ] get_unscored_vacancies uses LEFT JOIN correctly
 - [ ] Migrations are numbered and applied in order
 - [ ] events.emit() uses actor and correlation_id
-- [ ] Score range CHECK constraint: BETWEEN 0 AND 100
+- [ ]  Score range CHECK constraint: BETWEEN 0 AND 10
 
 ### Testing
 - [ ] All tests pass: `pytest -v`

@@ -75,6 +75,13 @@ async def scoring_worker(bot: Bot) -> None:
                 correlation_id = str(uuid4())
                 job_raw_id = vacancy["id"]
                 try:
+                    if not vacancy["raw_text"]:
+                        logger.warning(
+                            "Skipping vacancy with empty raw_text",
+                            extra={"job_raw_id": job_raw_id},
+                        )
+                        continue
+
                     result = await score_vacancy_llm(
                         vacancy_text=vacancy["raw_text"],
                         vacancy_id=job_raw_id,

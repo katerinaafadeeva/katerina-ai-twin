@@ -24,7 +24,7 @@ class Config:
         return cls(
             bot_token=os.environ["BOT_TOKEN"],
             db_path=os.getenv("DB_PATH", "data/career.db"),
-            anthropic_api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+            anthropic_api_key=os.environ["ANTHROPIC_API_KEY"],
             allowed_telegram_ids=ids,
             profile_path=os.getenv("PROFILE_PATH", "identity/profile.json"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
