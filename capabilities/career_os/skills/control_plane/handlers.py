@@ -13,7 +13,7 @@ from datetime import date
 from typing import Optional, Tuple
 
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, Message
 
 from core.config import config
 from core.db import get_conn
@@ -141,16 +141,19 @@ async def handle_approval_callback(callback: CallbackQuery) -> None:
         actor="operator",
     )
 
-    # 7. Answer callback and edit message
-    answer_text = _STATUS_ANSWER[new_status]
-    await callback.answer(answer_text)
-
+    # 7. Edit message, remove keyboard, then answer callback (stops button spinner last)
+    # Order: update_status → emit → edit_text → edit_reply_markup → callback.answer()
+    # Rationale: status is persisted before any Telegram I/O. If Telegram fails,
+    # the DB state is already correct and the button will show "Уже обработано" on retry.
     if callback.message is not None:
         original_text = callback.message.text or callback.message.caption or ""
         await callback.message.edit_text(
             original_text + _STATUS_SUFFIX[new_status]
         )
-        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[]))
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+    answer_text = _STATUS_ANSWER[new_status]
+    await callback.answer(answer_text)
 
 
 async def cmd_today(message: Message) -> None:
