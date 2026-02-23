@@ -1,9 +1,15 @@
-"""Shared pytest fixtures for PR-3 tests."""
+"""Shared pytest fixtures for PR-3+ tests."""
 
+import os
 import sqlite3
 from pathlib import Path
 
 import pytest
+
+# Set required env vars before any module-level imports trigger Config.from_env().
+# These are test-only dummies — no real API calls are made in unit tests.
+os.environ.setdefault("BOT_TOKEN", "test-bot-token")
+os.environ.setdefault("ANTHROPIC_API_KEY", "test-anthropic-key")
 
 from capabilities.career_os.models import Profile
 from core.llm.schemas import ScoreReason, ScoringOutput
