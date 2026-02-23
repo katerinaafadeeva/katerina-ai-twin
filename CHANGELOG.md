@@ -1,3 +1,24 @@
+## PR-5: Telegram Approval UX + Operator Commands (2026-02-20)
+
+### Added
+- Inline keyboard (approve/reject/snooze) for APPROVAL_REQUIRED notifications
+- /today command — daily summary: ingested, scored, by action_type, by status, limit usage
+- /limits command — policy thresholds and remaining daily capacity
+- /stats command — /today summary + list of pending APPROVAL_REQUIRED actions
+- Action state transitions: pending → approved / rejected / snoozed (idempotent guard via WHERE status='pending' + rowcount check)
+- Migration 005: non-destructive ALTER TABLE actions ADD COLUMN updated_at TIMESTAMP
+- control_plane skill: store.py (5 query functions) + handlers.py (callback + 3 commands)
+- Authorization: is_callback_authorized() for CallbackQuery, is_authorized() for all commands
+- Events emitted on approval: vacancy.approved / vacancy.rejected / vacancy.snoozed
+- 35 new tests (test_control_plane_store.py, test_control_plane_handlers.py); 130 total
+
+### Changed
+- worker.py APPROVAL_REQUIRED notification: now includes InlineKeyboardMarkup; action_rowid captured from save_action()
+- connectors/telegram_bot.py: registered cmd_today, cmd_limits, cmd_stats, handle_approval_callback
+- tests/conftest.py: added os.environ.setdefault for BOT_TOKEN and ANTHROPIC_API_KEY (test dummies) to enable handlers.py import in unit tests
+
+---
+
 # Changelog
 
 ## PR-4: Apply Policy Engine (2026-02-20)

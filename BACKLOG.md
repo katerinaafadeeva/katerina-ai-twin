@@ -34,11 +34,11 @@ Goal: HH + TG feed into one pipeline with scoring, policy and approvals.
 - HOLD daily summary notification (once per UTC day)
 - 54 new tests (95 total)
 
-### PR-5 Telegram Approval UX (NEXT)
-- approval queue in Telegram:
-  - Approve / Reject / Snooze / Add note / Choose CV variant (later)
-- operator commands:
-  - /policy /limits /today /stats
+### PR-5 Telegram Approval UX (DONE)
+- Inline keyboard approve/reject/snooze for APPROVAL_REQUIRED notifications
+- /today, /limits, /stats operator commands
+- Action state transitions with idempotent guard
+- 35 new tests (130 total)
 
 ### PR-6 HH Ingest v0.1 (NEXT)
 Goal: minimal HH pipeline without manual browsing.
@@ -77,3 +77,20 @@ Goal: dashboards & weekly review.
 - smallest possible diffs
 - decisions captured in DECISIONS.md (not only in chat)
 - token budget policy enforced
+BACKLOG — Post PR-4 follow-ups (не блокеры)
+
+Timezone-aware daily windows
+Сейчас date('now') = UTC. Для локального дня пользователя сделать TZ-aware (config-based).
+
+Daily limit under concurrency (future multi-worker)
+Возможен TOCTOU race между get_today_auto_count и save_action при >1 инстансе воркера.
+Решение: lock/transaction/atomic insert strategy.
+
+Telegram rate limiting / throttling (актуально с PR-6 HH ingest)
+При burst вакансий добавить небольшой sleep/очередь отправки сообщений.
+
+Optional: audit IGNORE decisions for analytics
+Сейчас IGNORE не пишется в actions (silent). Для аналитики можно добавить отдельную запись без уведомлений.
+
+Retention / cleanup policy for events/actions/job_raw
+База будет расти; добавить периодическую очистку/архивацию (M2).
