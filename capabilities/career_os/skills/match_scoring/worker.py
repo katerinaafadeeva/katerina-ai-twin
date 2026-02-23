@@ -9,6 +9,7 @@ import logging
 from uuid import uuid4
 
 from aiogram import Bot
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from capabilities.career_os.models import Profile
 from capabilities.career_os.skills.apply_policy.engine import ActionType, evaluate_policy
@@ -132,7 +133,7 @@ async def scoring_worker(bot: Bot) -> None:
                     )
 
                     with get_conn() as conn:
-                        save_action(
+                        action_rowid = save_action(
                             conn,
                             job_raw_id,
                             decision,
@@ -175,11 +176,21 @@ async def scoring_worker(bot: Bot) -> None:
                             )
 
                         elif decision.action_type == ActionType.APPROVAL_REQUIRED:
+                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{action_rowid}"),
+                                    InlineKeyboardButton(text="❌ Отклонить", callback_data=f"reject:{action_rowid}"),
+                                ],
+                                [
+                                    InlineKeyboardButton(text="⏸ Отложить", callback_data=f"snooze:{action_rowid}"),
+                                ],
+                            ])
                             await bot.send_message(
                                 chat_id,
                                 f"{emoji} Требует одобрения #{job_raw_id}: {result.score}/10\n"
                                 f"{decision.reason}\n"
                                 f"{result.explanation}",
+                                reply_markup=keyboard,
                             )
 
                         elif decision.action_type == ActionType.HOLD:
