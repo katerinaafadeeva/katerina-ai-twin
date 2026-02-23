@@ -7,9 +7,9 @@
 - PR-2: Telegram ingest + dedup + event emission; tested end-to-end
 - PR-3: LLM-assisted scoring (0-10) + async worker + security baseline + 41 tests
 - PR-4: apply_policy (deterministic routing + actions log + daily limit + HOLD summary) + 54 tests
+- PR-5: Telegram approval UX (inline keyboard, /today /limits /stats, action state transitions) + 35 tests
 
 ### Next (execution order)
-- PR-5: Telegram approval flow + operator commands (cover letter generation via LLM)
 - PR-6: HH ingest v0.1 (saved search URLs -> job_raw -> digest)
 - PR-7: Data normalization (job_parsed table)
 

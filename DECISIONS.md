@@ -132,3 +132,14 @@ Production deployments must set `ALLOWED_TELEGRAM_IDS` in `.env`.
 - HOLD summary: emit(policy.hold_summary) BEFORE send_message for durability (dedup marker survives Telegram failures).
 - HOLD summary tracking: via policy.hold_summary event in events table, sent once per UTC day.
 - Migration 004: ALTER TABLE only (non-destructive), adds score/reason/actor/correlation_id to actions.
+
+## PR-5 Decisions (Telegram Approval UX)
+- Snooze = status marker only; no timer/reminder in MVP (simplest safe option)
+- Callback format: `{action}:{action_id}` where action ∈ {approve, reject, snooze}
+- control_plane code in its own skill (control_plane), not embedded in scoring worker
+- All status transitions from 'pending' only; idempotent (WHERE status='pending' + rowcount check)
+- updated_at tracks operator action timestamp (migration 005, non-destructive)
+- is_callback_authorized() is separate from is_authorized(): CallbackQuery.from_user is always present, Message.from_user may not be for some message types
+- Double-click protection: second attempt returns "Уже обработано", no crash, no duplicate event
+- emit(vacancy.*) happens BEFORE callback.answer() to ensure audit durability
+- Keyboard is removed (edit_reply_markup with empty markup) after any decision

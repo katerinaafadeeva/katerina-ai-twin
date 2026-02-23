@@ -1,27 +1,25 @@
 ---
 name: control_plane
-description: Operational control layer for Katerina AI Twin
+description: Operator control — approval flow, commands, policy monitoring
 ---
 
-# Control Plane
-
-This skill manages operational commands and policies for the AI Twin.
+# Control Plane (v1 — Telegram Approval UX)
 
 ## Responsibilities
 
-- manage scoring thresholds
-- manage daily auto-send limits
-- expose operational commands
-- store policy updates
+### Approval Flow
+- Receive inline button callbacks (approve/reject/snooze)
+- Validate: only APPROVAL_REQUIRED + pending can transition
+- Update action status + emit event
+- Edit original message to reflect decision
 
-## Commands (future Telegram mapping)
+### Operator Commands
+- /today — daily summary (ingested, scored, actions by type/status, limit usage)
+- /limits — policy thresholds and remaining capacity
+- /stats — detailed summary + list of pending approvals
 
-- /policy
-- /limits
-- set threshold <value>
-- set daily_limit <value>
+## Authorization
+All callbacks and commands check ALLOWED_TELEGRAM_IDS.
 
-## Outputs
-
-- confirmation messages
-- updated policy state
+## No LLM
+All queries are deterministic SQL. No LLM calls.
