@@ -2,13 +2,19 @@ import asyncio
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, MessageOriginChannel
+from aiogram.types import CallbackQuery, Message, MessageOriginChannel
 
 from core.config import config
 from core.db import init_db
 from core.security import is_authorized
 from capabilities.career_os.skills.vacancy_ingest_telegram.handler import ingest
 from capabilities.career_os.skills.match_scoring.worker import scoring_worker
+from capabilities.career_os.skills.control_plane.handlers import (
+    cmd_limits,
+    cmd_stats,
+    cmd_today,
+    handle_approval_callback,
+)
 
 dp = Dispatcher()
 
@@ -52,6 +58,15 @@ async def handle_forward(message: Message) -> None:
 async def main() -> None:
     init_db()
     bot = Bot(token=config.bot_token)
+
+    # Operator commands
+    dp.message.register(cmd_today, Command("today"))
+    dp.message.register(cmd_limits, Command("limits"))
+    dp.message.register(cmd_stats, Command("stats"))
+
+    # Inline button callbacks (approve/reject/snooze)
+    dp.callback_query.register(handle_approval_callback)
+
     asyncio.create_task(scoring_worker(bot))
     await dp.start_polling(bot)
 
