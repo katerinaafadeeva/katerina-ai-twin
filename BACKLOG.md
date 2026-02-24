@@ -40,18 +40,19 @@ Goal: HH + TG feed into one pipeline with scoring, policy and approvals.
 - Action state transitions with idempotent guard
 - 35 new tests (130 total)
 
-### PR-6 HH Ingest v0.1 (NEXT)
-Goal: minimal HH pipeline without manual browsing.
-- connector that pulls from user-provided saved search URLs (or exported list)
-- incremental updates (only new vacancies)
-- normalization into job_raw with source="hh"
-- dedup across sources (canonical_key/company+title heuristic)
-
-Acceptance: “daily digest top-N HH vacancies + scoring” delivered via Telegram.
+### PR-6 HH Ingest v0.1 (DONE)
+- Anonymous HH API (≤1 req/sec, retry on 429/5xx, pagination up to max_pages)
+- Migration 006: hh_vacancy_id column + index on job_raw
+- connectors/hh_api.py: HHApiClient with rate limiting and exponential backoff
+- vacancy_ingest_hh skill: prefilter, store (3-level dedup), handler, background worker
+- Scoring daily cap: HH_SCORING_DAILY_CAP=100, enforced before LLM call
+- Pre-filtered vacancies NOT saved to job_raw (no spurious scoring)
+- 70 new tests (200 total)
 
 ### PR-7 Data normalization (NEXT)
 - introduce job_parsed table (role/company/geo/remote/salary/link)
 - keep raw in job_raw, parsed in job_parsed
+- heuristic or LLM-assisted extraction of structured fields from normalized raw_text
 
 ---
 
