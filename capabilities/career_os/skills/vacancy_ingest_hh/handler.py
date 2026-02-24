@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 from capabilities.career_os.models import Profile
 from capabilities.career_os.skills.vacancy_ingest_hh.prefilter import should_score
 from capabilities.career_os.skills.vacancy_ingest_hh.store import (
+    compute_canonical_key,
     is_canonical_key_ingested,
     is_hh_vacancy_ingested,
     save_hh_vacancy,
@@ -172,8 +173,7 @@ def ingest_hh_vacancies(
             continue
 
         # Dedup level 2: canonical_key (cross-source TG↔HH)
-        from capabilities.career_os.skills.vacancy_ingest_hh.store import _canonical_key
-        key = _canonical_key(normalized["raw_text"])
+        key = compute_canonical_key(normalized["raw_text"])
         with get_conn() as conn:
             if is_canonical_key_ingested(conn, key):
                 logger.debug(

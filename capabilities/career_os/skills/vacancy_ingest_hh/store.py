@@ -12,7 +12,7 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 
-def _canonical_key(text: str) -> str:
+def compute_canonical_key(text: str) -> str:
     """Generate canonical key for cross-source dedup (TG↔HH).
 
     Uses same algorithm as vacancy_ingest_telegram.handler for compatibility.
@@ -20,6 +20,10 @@ def _canonical_key(text: str) -> str:
     """
     normalized = text.strip().lower()[:200]
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+
+# Keep internal alias for backward-compat within this module
+_canonical_key = compute_canonical_key
 
 
 def is_hh_vacancy_ingested(conn: sqlite3.Connection, hh_vacancy_id: str) -> bool:
