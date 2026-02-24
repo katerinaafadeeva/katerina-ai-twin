@@ -142,4 +142,36 @@ Production deployments must set `ALLOWED_TELEGRAM_IDS` in `.env`.
 - is_callback_authorized() is separate from is_authorized(): CallbackQuery.from_user is always present, Message.from_user may not be for some message types
 - Double-click protection: second attempt returns "Уже обработано", no crash, no duplicate event
 - emit(vacancy.*) happens BEFORE callback.answer() to ensure audit durability
-- Keyboard is removed (edit_reply_markup with empty markup) after any decision
+- Keyboard is removed (`reply_markup=None`) after any decision — not `InlineKeyboardMarkup(inline_keyboard=[])` which causes aiogram warnings
+- callback.answer() called AFTER edit_text + edit_reply_markup (spinner stops last, ensuring message is already updated)
+
+## PR-6 Decisions (HH Ingest v0.1) (2026-02-24)
+
+### Anonymous HH API (no OAuth)
+Rationale: OAuth adds credential storage complexity, token refresh, and account risk.
+Anonymous API is sufficient for vacancy search (read-only, public data).
+Rate limit ≤1 req/sec enforced in `HHApiClient._rate_limit()` via `time.monotonic()`.
+
+### Pre-filter BEFORE LLM (no tokens wasted on filtered vacancies)
+`should_score()` checks `negative_signals` + `industries_excluded` against raw_text.
+Filtered vacancies are NOT saved to `job_raw` — prevents the scoring worker from picking them up.
+Trade-off: no analytics on filtered vacancies. Mitigated by `hh.search_completed` event which includes `filtered` count.
+
+### Three-level dedup
+1. `hh_vacancy_id` — fast, HH-native, prevents refetching same page
+2. `canonical_key` (SHA256 of first 200 chars lowercased) — cross-source: catches same vacancy forwarded via Telegram then found on HH
+3. DB UNIQUE `(source, source_message_id)` — last-resort at DB level (INSERT OR IGNORE)
+Same `compute_canonical_key` algorithm as vacancy_ingest_telegram for cross-source compatibility.
+
+### Scoring daily cap (emit-first durability)
+`scoring.cap_reached` event emitted BEFORE `bot.send_message()` — same durability pattern as HOLD summary.
+If Telegram fails after emit, dedup marker is still persisted → next cycle skips notification.
+If emit fails before send_message → no marker → notification sent again next cycle (acceptable: duplicate cap warning is better than silent miss).
+
+### HH_ENABLED=false default (safe opt-in)
+Worker exits immediately if `HH_ENABLED` is falsy — no surprise API calls on first deploy.
+Operator must explicitly set `HH_ENABLED=true` in `.env`.
+
+### hh_searches.json gitignored (identity data)
+Search queries reveal job-search intent (role, location, salary signals) — treated as PII-adjacent.
+`identity/hh_searches.example.json` committed as template; real file gitignored.

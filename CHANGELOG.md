@@ -1,3 +1,42 @@
+## PR-6: HH Ingest v0.1 (2026-02-24)
+
+### Added
+- `connectors/hh_api.py` — `HHApiClient`: async HTTP client, ≤1 req/sec rate limit, exponential backoff on 429/5xx, pagination up to `max_pages`, 30s timeout
+- `core/migrations/006_job_raw_hh_id.sql` — non-destructive `ALTER TABLE job_raw ADD COLUMN hh_vacancy_id TEXT` + index
+- `capabilities/career_os/skills/vacancy_ingest_hh/` — new skill:
+  - `prefilter.py` — `should_score()`: deterministic rejection by `negative_signals` + `industries_excluded` (case-insensitive substring, no LLM)
+  - `store.py` — `compute_canonical_key` (SHA256 16-char hex, identical algorithm to TG ingest), `is_hh_vacancy_ingested`, `is_canonical_key_ingested`, `get_today_scored_count`, `was_scoring_cap_notification_sent_today`, `save_hh_vacancy`
+  - `handler.py` — `load_search_queries`, `normalize_vacancy` (name/employer/salary/area/schedule/snippet → raw_text), `ingest_hh_vacancies` (3-level dedup pipeline)
+  - `worker.py` — `hh_ingest_worker()`: async background loop, no-op if `HH_ENABLED=false`, emits `hh.search_completed` per query
+  - `SKILL.md` — skill contract
+- `identity/hh_searches.example.json` — example search queries (no personal data)
+- 6 new config fields: `hh_enabled`, `hh_poll_interval`, `hh_user_agent`, `hh_max_pages`, `hh_scoring_daily_cap`, `hh_searches_path`
+- **70 new tests** (test_hh_api.py: 16, test_hh_ingest.py: 40, test_hh_prefilter.py: 10, test_hh_ingest.py scoring cap: 5); **200 total**
+
+### Changed
+- `match_scoring/worker.py` — added scoring daily cap check before `score_vacancy_llm()` call; cap notification (`scoring.cap_reached` event + Telegram message) with emit-first durability pattern
+- `connectors/telegram_bot.py` — registered `hh_ingest_worker` as background asyncio task
+- `.env.example` — added HH-related env vars with safe defaults (`HH_ENABLED=false`)
+- `requirements.txt` — added `httpx`
+
+### Dedup contract (3 levels)
+
+| Level | Key | Scope |
+|---|---|---|
+| 1 | `hh_vacancy_id` | HH source only — fast O(1) index lookup |
+| 2 | `canonical_key` | All sources — catches TG↔HH cross-source duplicates |
+| 3 | DB UNIQUE `(source, source_message_id)` | Last-resort — INSERT OR IGNORE |
+
+### New events
+
+| Event | Actor | Payload |
+|---|---|---|
+| `vacancy.ingested` | `hh_ingest` | job_raw_id, source="hh", hh_vacancy_id |
+| `hh.search_completed` | `hh_ingest_worker` | query_text, total, new, duplicate, filtered |
+| `scoring.cap_reached` | `scoring_worker` | cap |
+
+---
+
 ## PR-5: Telegram Approval UX + Operator Commands (2026-02-20)
 
 ### Added

@@ -17,6 +17,14 @@ class Config:
     log_level: str
     scoring_worker_interval: int  # seconds
 
+    # HH.ru integration
+    hh_enabled: bool
+    hh_poll_interval: int       # seconds between HH poll cycles
+    hh_user_agent: str          # User-Agent for HH API
+    hh_max_pages: int           # max search result pages to fetch
+    hh_scoring_daily_cap: int   # max LLM scoring calls per day (0 = no cap)
+    hh_searches_path: str       # path to search queries JSON
+
     @classmethod
     def from_env(cls) -> "Config":
         ids_raw = os.getenv("ALLOWED_TELEGRAM_IDS", "")
@@ -29,6 +37,13 @@ class Config:
             profile_path=os.getenv("PROFILE_PATH", "identity/profile.json"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             scoring_worker_interval=int(os.getenv("SCORING_WORKER_INTERVAL", "10")),
+            # HH
+            hh_enabled=os.getenv("HH_ENABLED", "false").lower() in ("true", "1", "yes"),
+            hh_poll_interval=int(os.getenv("HH_POLL_INTERVAL", "3600")),
+            hh_user_agent=os.getenv("HH_USER_AGENT", "KaterinaAITwin/0.1"),
+            hh_max_pages=int(os.getenv("HH_MAX_PAGES", "5")),
+            hh_scoring_daily_cap=int(os.getenv("HH_SCORING_DAILY_CAP", "100")),
+            hh_searches_path=os.getenv("HH_SEARCHES_PATH", "identity/hh_searches.json"),
         )
 
 

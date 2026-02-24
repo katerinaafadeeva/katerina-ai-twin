@@ -25,6 +25,10 @@ from capabilities.career_os.skills.match_scoring.store import (
     get_unscored_vacancies,
     save_score,
 )
+from capabilities.career_os.skills.vacancy_ingest_hh.store import (
+    get_today_scored_count,
+    was_scoring_cap_notification_sent_today,
+)
 from core.config import config
 from core.db import get_conn
 from core.events import emit
@@ -79,6 +83,7 @@ async def scoring_worker(bot: Bot) -> None:
             with get_conn() as conn:
                 unscored = get_unscored_vacancies(conn)
 
+            cap_reached_this_cycle = False
             for vacancy in unscored:
                 correlation_id = str(uuid4())
                 job_raw_id = vacancy["id"]
@@ -89,6 +94,19 @@ async def scoring_worker(bot: Bot) -> None:
                             extra={"job_raw_id": job_raw_id},
                         )
                         continue
+
+                    # --- Scoring daily cap check (before LLM call) ---
+                    if config.hh_scoring_daily_cap > 0:
+                        with get_conn() as conn:
+                            scored_today = get_today_scored_count(conn)
+                        if scored_today >= config.hh_scoring_daily_cap:
+                            logger.info(
+                                "Scoring daily cap reached (%d/%d) — stopping scoring this cycle",
+                                scored_today,
+                                config.hh_scoring_daily_cap,
+                            )
+                            cap_reached_this_cycle = True
+                            break
 
                     result = await score_vacancy_llm(
                         vacancy_text=vacancy["raw_text"],
@@ -201,6 +219,27 @@ async def scoring_worker(bot: Bot) -> None:
                         "Scoring/policy failed for vacancy",
                         extra={"job_raw_id": job_raw_id},
                     )
+
+            # --- Scoring cap notification (once per UTC day) ---
+            # Ordering: emit FIRST (dedup marker), then send_message (same durability pattern as HOLD).
+            if cap_reached_this_cycle and config.allowed_telegram_ids:
+                try:
+                    with get_conn() as conn:
+                        already_notified = was_scoring_cap_notification_sent_today(conn)
+                    if not already_notified:
+                        emit(
+                            "scoring.cap_reached",
+                            {"cap": config.hh_scoring_daily_cap},
+                            actor="scoring_worker",
+                        )
+                        chat_id = config.allowed_telegram_ids[0]
+                        await bot.send_message(
+                            chat_id,
+                            f"🔒 Лимит скоринга достигнут: {config.hh_scoring_daily_cap}/день. "
+                            f"Необработанные вакансии будут оценены завтра.",
+                        )
+                except Exception:
+                    logger.exception("Scoring cap notification failed")
 
             # --- HOLD daily summary (once per UTC day) ---
             # Ordering: emit FIRST (persistence), then send_message.
