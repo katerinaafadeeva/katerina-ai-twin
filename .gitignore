@@ -3,3 +3,5 @@ data/
 *.db
 __pycache__/
 identity/profile.json
+identity/hh_searches.json
+identity/hh_storage_state.json
