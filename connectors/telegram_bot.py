@@ -9,6 +9,7 @@ from core.db import init_db
 from core.security import is_authorized
 from capabilities.career_os.skills.vacancy_ingest_telegram.handler import ingest
 from capabilities.career_os.skills.match_scoring.worker import scoring_worker
+from capabilities.career_os.skills.vacancy_ingest_hh.worker import hh_ingest_worker
 from capabilities.career_os.skills.control_plane.handlers import (
     cmd_limits,
     cmd_stats,
@@ -68,6 +69,8 @@ async def main() -> None:
     dp.callback_query.register(handle_approval_callback)
 
     asyncio.create_task(scoring_worker(bot))
+    # Start HH ingest worker (no-op if HH_ENABLED=false)
+    asyncio.create_task(hh_ingest_worker())
     await dp.start_polling(bot)
 
 
