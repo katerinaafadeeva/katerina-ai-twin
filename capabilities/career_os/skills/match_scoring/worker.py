@@ -25,6 +25,15 @@ from capabilities.career_os.skills.match_scoring.store import (
     get_unscored_vacancies,
     save_score,
 )
+from capabilities.career_os.skills.cover_letter.generator import (
+    generate_cover_letter,
+    get_fallback_letter,
+)
+from capabilities.career_os.skills.cover_letter.store import (
+    get_today_cover_letter_count,
+    save_cover_letter,
+    was_cover_letter_cap_notification_sent_today,
+)
 from capabilities.career_os.skills.vacancy_ingest_hh.store import (
     get_today_scored_count,
     was_scoring_cap_notification_sent_today,
@@ -32,6 +41,7 @@ from capabilities.career_os.skills.vacancy_ingest_hh.store import (
 from core.config import config
 from core.db import get_conn
 from core.events import emit
+from core.llm.prompts.cover_letter_v1 import PROMPT_VERSION as CL_PROMPT_VERSION
 from core.llm.prompts.scoring_v1 import PROMPT_VERSION
 
 logger = logging.getLogger(__name__)
@@ -171,6 +181,61 @@ async def scoring_worker(bot: Bot) -> None:
                         correlation_id=correlation_id,
                     )
 
+                    # --- Cover letter generation (AUTO_APPLY and APPROVAL_REQUIRED only) ---
+                    cover_letter_text = None
+                    if decision.action_type in (ActionType.AUTO_APPLY, ActionType.APPROVAL_REQUIRED):
+                        try:
+                            reasons_text = "\n".join(
+                                f"- {r.criterion}: {'✓' if r.matched else '✗'} {r.note}"
+                                for r in result.reasons
+                            )
+
+                            use_fallback = False
+                            if config.cover_letter_daily_cap > 0:
+                                with get_conn() as conn:
+                                    cl_today = get_today_cover_letter_count(conn)
+                                if cl_today >= config.cover_letter_daily_cap:
+                                    logger.info(
+                                        "Cover letter daily cap reached (%d/%d) — using fallback",
+                                        cl_today, config.cover_letter_daily_cap,
+                                    )
+                                    use_fallback = True
+
+                            if use_fallback:
+                                letter_text = get_fallback_letter()
+                                is_fb, in_tok, out_tok, cost = True, 0, 0, 0.0
+                            else:
+                                letter_text, is_fb, in_tok, out_tok, cost = await generate_cover_letter(
+                                    vacancy_text=vacancy["raw_text"],
+                                    vacancy_id=job_raw_id,
+                                    profile=profile,
+                                    score_reasons=reasons_text,
+                                    correlation_id=correlation_id,
+                                )
+
+                            with get_conn() as conn:
+                                save_cover_letter(
+                                    conn,
+                                    job_raw_id=job_raw_id,
+                                    action_id=action_rowid,
+                                    letter_text=letter_text,
+                                    model="fallback" if is_fb else "claude-haiku-4-5-20251001",
+                                    prompt_version=CL_PROMPT_VERSION,
+                                    is_fallback=is_fb,
+                                    input_tokens=in_tok,
+                                    output_tokens=out_tok,
+                                    cost_usd=cost,
+                                )
+                                conn.commit()
+
+                            cover_letter_text = letter_text
+
+                        except Exception:
+                            logger.exception(
+                                "Cover letter generation failed for vacancy %d — continuing",
+                                job_raw_id,
+                            )
+
                     # --- Telegram notification (per action type) ---
                     if config.allowed_telegram_ids:
                         chat_id = config.allowed_telegram_ids[0]
@@ -194,6 +259,13 @@ async def scoring_worker(bot: Bot) -> None:
                             )
 
                         elif decision.action_type == ActionType.APPROVAL_REQUIRED:
+                            cl_preview = ""
+                            if cover_letter_text:
+                                preview = cover_letter_text[:200]
+                                if len(cover_letter_text) > 200:
+                                    preview += "..."
+                                cl_preview = f"\n\n📝 Сопроводительное:\n{preview}"
+
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [
                                     InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{action_rowid}"),
@@ -207,7 +279,8 @@ async def scoring_worker(bot: Bot) -> None:
                                 chat_id,
                                 f"{emoji} Требует одобрения #{job_raw_id}: {result.score}/10\n"
                                 f"{decision.reason}\n"
-                                f"{result.explanation}",
+                                f"{result.explanation}"
+                                f"{cl_preview}",
                                 reply_markup=keyboard,
                             )
 
@@ -240,6 +313,28 @@ async def scoring_worker(bot: Bot) -> None:
                         )
                 except Exception:
                     logger.exception("Scoring cap notification failed")
+
+            # --- Cover letter cap notification (once per UTC day) ---
+            # emit FIRST (dedup marker), then send_message — same durability pattern as HOLD.
+            if config.cover_letter_daily_cap > 0 and config.allowed_telegram_ids:
+                try:
+                    with get_conn() as conn:
+                        cl_today = get_today_cover_letter_count(conn)
+                        cl_already_notified = was_cover_letter_cap_notification_sent_today(conn)
+                    if cl_today >= config.cover_letter_daily_cap and not cl_already_notified:
+                        emit(
+                            "cover_letter.cap_reached",
+                            {"cap": config.cover_letter_daily_cap},
+                            actor="cover_letter_generator",
+                        )
+                        chat_id = config.allowed_telegram_ids[0]
+                        await bot.send_message(
+                            chat_id,
+                            f"📝 Лимит сопроводительных достигнут: {config.cover_letter_daily_cap}/день. "
+                            f"Дальнейшие письма будут по шаблону.",
+                        )
+                except Exception:
+                    logger.exception("Cover letter cap notification failed")
 
             # --- HOLD daily summary (once per UTC day) ---
             # Ordering: emit FIRST (persistence), then send_message.
