@@ -15,6 +15,11 @@ class ScoringOutput(BaseModel):
     explanation: str = Field(min_length=10, max_length=500)
 
 
+class CoverLetterOutput(BaseModel):
+    """Validated cover letter output — simple length check."""
+    letter_text: str = Field(min_length=50, max_length=2000)
+
+
 class LLMCallRecord(BaseModel):
     """Audit record for each LLM call. Written to events table."""
 
