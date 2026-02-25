@@ -49,7 +49,15 @@ Goal: HH + TG feed into one pipeline with scoring, policy and approvals.
 - Pre-filtered vacancies NOT saved to job_raw (no spurious scoring)
 - 70 new tests (200 total)
 
-### PR-7 Data normalization (NEXT)
+### PR-7 Cover Letter Generation (DONE)
+- Migration 007: cover_letters table with UNIQUE(job_raw_id, action_id), tokens, cost, is_fallback
+- Generator: Claude Haiku 4.5, temperature=0.3; prompt injection defence via XML tags
+- Fallback chain: real file → .example.txt → hardcoded default (never blocks)
+- Daily cap (COVER_LETTER_DAILY_CAP=50), emit-first cap notification
+- Worker integration: AUTO_APPLY + APPROVAL_REQUIRED, non-fatal try/except
+- 40 new tests (240 total)
+
+### PR-8 Data normalization (NEXT)
 - introduce job_parsed table (role/company/geo/remote/salary/link)
 - keep raw in job_raw, parsed in job_parsed
 - heuristic or LLM-assisted extraction of structured fields from normalized raw_text

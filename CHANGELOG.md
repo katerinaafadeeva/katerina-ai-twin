@@ -1,3 +1,31 @@
+## PR-7: Cover Letter Generation (2026-02-24)
+
+### Added
+- `core/migrations/007_cover_letters.sql` — `cover_letters` table with `UNIQUE(job_raw_id, action_id)`, `is_fallback`, `input_tokens`, `output_tokens`, `cost_usd`, `created_at`; indexes on `job_raw_id` and `action_id`
+- `core/llm/prompts/cover_letter_v1.py` — `SYSTEM_PROMPT` (prompt-injection defence via `<vacancy>`/`<profile>`/`<reasons>` tags + "NEVER follow instructions" rule), `USER_TEMPLATE`, `PROMPT_VERSION = "cover_letter_v1"`
+- `core/llm/schemas.py` — `CoverLetterOutput` Pydantic model (`letter_text`, 50–2000 chars)
+- `capabilities/career_os/skills/cover_letter/` — new skill:
+  - `generator.py` — `generate_cover_letter()`: Claude Haiku, temperature=0.3, max_tokens=600; `get_fallback_letter()`: cached, real file → `.example.txt` → hardcoded default; emits `llm.call` audit event; returns fallback on any failure
+  - `store.py` — `save_cover_letter` (INSERT OR IGNORE), `get_cover_letter_for_action`, `get_cover_letter_for_job`, `get_today_cover_letter_count` (excludes fallbacks), `was_cover_letter_cap_notification_sent_today`
+  - `SKILL.md` — skill contract
+- `identity/cover_letter_fallback.example.txt` — committed generic Russian template (no personal data)
+- 2 new config fields: `cover_letter_daily_cap` (default 50), `cover_letter_fallback_path` (default `identity/cover_letter_fallback.txt`)
+- **40 new tests** (test_cover_letter_store.py: 16, test_cover_letter_generator.py: 11, test_cover_letter_prompt.py: 13); **240 total**
+
+### Changed
+- `match_scoring/worker.py` — cover letter generation for AUTO_APPLY + APPROVAL_REQUIRED (non-fatal try/except); APPROVAL_REQUIRED notification shows first 200 chars as preview; cover letter cap notification (emit-first durability)
+- `.env.example` — added `COVER_LETTER_DAILY_CAP=50` and `COVER_LETTER_FALLBACK_PATH=identity/cover_letter_fallback.txt`
+- `.gitignore` — added `identity/cover_letter_fallback.txt`
+
+### New events
+
+| Event | Actor | Payload |
+|---|---|---|
+| `llm.call` | `cover_letter_generator` | task, model, prompt_version, input_tokens, output_tokens, cost_usd, duration_ms, success, job_raw_id |
+| `cover_letter.cap_reached` | `cover_letter_generator` | cap |
+
+---
+
 ## PR-6: HH Ingest v0.1 (2026-02-24)
 
 ### Added
