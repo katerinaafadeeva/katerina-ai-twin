@@ -175,3 +175,37 @@ Operator must explicitly set `HH_ENABLED=true` in `.env`.
 ### hh_searches.json gitignored (identity data)
 Search queries reveal job-search intent (role, location, salary signals) — treated as PII-adjacent.
 `identity/hh_searches.example.json` committed as template; real file gitignored.
+
+## PR-7 Decisions (Cover Letter Generation) (2026-02-24)
+
+### Claude Haiku 4.5 for cover letters (not Sonnet)
+Haiku is 10× cheaper and sufficient for a 150–400 word structured Russian letter.
+Cost per letter ≈ $0.001 at typical token counts (200 in / 300 out).
+Sonnet fallback NOT added for cover letters — Haiku failure triggers static fallback template instead.
+Rationale: cover letter quality is verified by operator before sending; a static template is acceptable.
+
+### Fallback chain (three levels, never blocks)
+1. `identity/cover_letter_fallback.txt` — operator-customised real file (gitignored)
+2. `identity/cover_letter_fallback.example.txt` — generic committed template (no PII)
+3. Hardcoded default string — last resort, always available
+Module-level `_fallback_cache` avoids repeated file I/O.
+Static fallback is returned with `is_fallback=True` and tokens=0/cost=0.0 for accurate cap tracking.
+
+### Cover letter daily cap excludes fallbacks
+`get_today_cover_letter_count()` counts only `is_fallback=0` rows.
+Fallbacks are free (no LLM call) and must not consume quota.
+Cap notification uses same emit-first durability pattern as scoring cap and HOLD summary.
+
+### Cover letter in try/except — non-fatal
+Cover letter failure must not block vacancy scoring, policy, or Telegram notification.
+Outer per-vacancy try/except already protects scoring; cover letter has its own inner try/except.
+If generation fails, notification is sent without cover letter preview (cover_letter_text stays None).
+
+### UNIQUE(job_raw_id, action_id) — INSERT OR IGNORE idempotency
+Prevents duplicate letters if worker restarts mid-cycle.
+`save_cover_letter` returns `cursor.lastrowid` on insert, 0 on duplicate — caller can detect either case.
+
+### cover_letter_fallback.txt gitignored (identity data)
+The real fallback template is personal (tone, contact info, self-description).
+Committed only the `.example.txt` sibling (generic, no PII).
+Same pattern as `identity/profile.json` and `identity/hh_searches.json`.

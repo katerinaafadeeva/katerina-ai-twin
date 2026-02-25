@@ -25,6 +25,10 @@ class Config:
     hh_scoring_daily_cap: int   # max LLM scoring calls per day (0 = no cap)
     hh_searches_path: str       # path to search queries JSON
 
+    # Cover letter generation
+    cover_letter_daily_cap: int      # max LLM cover letter calls per day (0 = no cap)
+    cover_letter_fallback_path: str  # path to fallback template file
+
     @classmethod
     def from_env(cls) -> "Config":
         ids_raw = os.getenv("ALLOWED_TELEGRAM_IDS", "")
@@ -44,6 +48,11 @@ class Config:
             hh_max_pages=int(os.getenv("HH_MAX_PAGES", "5")),
             hh_scoring_daily_cap=int(os.getenv("HH_SCORING_DAILY_CAP", "100")),
             hh_searches_path=os.getenv("HH_SEARCHES_PATH", "identity/hh_searches.json"),
+            # Cover letter
+            cover_letter_daily_cap=int(os.getenv("COVER_LETTER_DAILY_CAP", "50")),
+            cover_letter_fallback_path=os.getenv(
+                "COVER_LETTER_FALLBACK_PATH", "identity/cover_letter_fallback.txt"
+            ),
         )
 
 
