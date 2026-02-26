@@ -10,10 +10,13 @@
 | PR-4 | Policy engine (threshold evaluation, daily cap, auto-queue) | ✅ DONE |
 | PR-5 | Telegram Approval UX (inline keyboard, operator commands) | ✅ DONE |
 | PR-6 | HH Ingest v0.1 (anonymous API, pre-filter, scoring cap, 70 new tests) | ✅ DONE |
-| **PR-7** | **Cover letter generation (LLM + fallback, daily cap, 40 new tests)** | **✅ DONE** |
-| PR-8 | Data normalization (job_parsed table) | 🔜 NEXT |
-| PR-9 | Web UI — pipeline dashboard | ⏳ planned |
-| PR-9 | Web UI — pipeline dashboard | ⏳ planned |
+| PR-7 | Cover letter generation (LLM + fallback, daily cap, 40 new tests) | ✅ DONE |
+| **PR-8** | **Playwright auto-apply on HH.ru (browser automation, 49 new tests)** | **✅ DONE** |
+
+## 🎉 MVP v1 COMPLETE — PR-1..PR-8 merged
+
+End-to-end pipeline:
+**HH Ingest → Scoring → Policy → Cover Letter → Auto-Apply → ✅**
 
 ## PR-6 summary (merged 2026-02-24)
 
@@ -34,11 +37,21 @@
 - APPROVAL_REQUIRED notification: shows first 200 chars of cover letter as preview
 - Tests: **40 new tests, 240 total**, all green
 
-## Next: PR-8 — Data Normalization
+## PR-8 summary (2026-02-26)
 
-Goals:
-- Introduce `job_parsed` table (role/company/geo/remote/salary/link)
-- Keep raw text in `job_raw`, structured fields in `job_parsed`
-- LLM-assisted extraction or heuristic parser for HH normalized fields
+- Migration 008: `execution_status`, `execution_error`, `execution_attempts`, `applied_at`, `hh_apply_url` in `actions`
+- `connectors/hh_browser/`: `client.py` (lazy Playwright, auth storage state), `selectors.py`, `apply_flow.py` (DONE/ALREADY_APPLIED/MANUAL_REQUIRED/CAPTCHA/SESSION_EXPIRED/FAILED), `bootstrap.py`
+- `capabilities/career_os/skills/hh_apply/`: `store.py`, `worker.py`, `notifier.py`, `SKILL.md`
+- Feature flag: `HH_APPLY_ENABLED=false` (safe opt-in). Daily cap `APPLY_DAILY_CAP=10`. Random delays `[10..30]s`. Batch size 5.
+- Captcha → stop batch. Session expired → stop + notify. All browser ops in try/except.
+- `/resume_apply` Telegram command. Emit-first apply cap notification.
+- Tests: **49 new tests, 289 total**, all green. Zero LLM calls. Zero real Playwright in tests.
 
-Depends on: PR-6 (hh_vacancy_id, normalized raw_text format), PR-7 (cover_letters table)
+## Iteration 2 — Post-MVP Roadmap
+
+| PR | Scope |
+|---|---|
+| PR-9 | Data normalization (job_parsed table) |
+| PR-10 | Web UI — pipeline dashboard |
+| PR-11 | comms_os — email/DM follow-ups |
+| PR-12 | Auto-retry with backoff, screenshots on error, Docker support |
