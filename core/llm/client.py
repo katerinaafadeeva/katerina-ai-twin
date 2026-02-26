@@ -34,24 +34,49 @@ FALLBACK_MODEL = "claude-sonnet-4-6"
 
 _CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
 
-
 def _extract_json(text: str) -> str:
-    """Strip markdown code fences from LLM output if present.
+    """Extract JSON from LLM output robustly.
 
-    LLMs sometimes wrap JSON in ```json ... ``` even when instructed not to.
-    This handles both ``` and ```json variants robustly.
+    Handles:
+      - raw JSON
+      - fenced blocks ```json ... ``` (closed)
+      - fenced blocks without closing ``` (some models do this)
+      - extra prose around JSON (best-effort by slicing {...})
 
-    Raises ValueError if the result is clearly not JSON (empty or obviously wrong).
+    Raises ValueError if we can't confidently locate a JSON object.
     """
-    text = text.strip()
-    m = _CODE_FENCE_RE.search(text)
-    if m:
-        text = m.group(1).strip()
+    if not text:
+        raise ValueError("Empty LLM output")
 
-    if not text.startswith("{"):
+    s = text.strip()
+
+    # 1) Prefer a closed fenced block if present
+    m = _CODE_FENCE_RE.search(s)
+    if m:
+        s = m.group(1).strip()
+    else:
+        # 2) Handle an *unclosed* fence: starts with ``` or ```json
+        if s.startswith("```"):
+            # drop first line (``` or ```json)
+            nl = s.find("\n")
+            if nl != -1:
+                s = s[nl + 1 :].strip()
+            # if it still contains a closing fence later, drop it
+            end = s.rfind("```")
+            if end != -1:
+                s = s[:end].strip()
+
+    # 3) If the string isn't a JSON object, try to slice from first { to last }
+    if not s.startswith("{"):
+        start = s.find("{")
+        end = s.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            s = s[start : end + 1].strip()
+
+    if not s.startswith("{"):
         raise ValueError(f"LLM output does not look like JSON: {text[:100]!r}")
 
-    return text
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +125,7 @@ async def call_llm_scoring(
     try:
         response = await client.messages.create(
             model=model,
-            max_tokens=400,
+            max_tokens=900,
             temperature=0,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
