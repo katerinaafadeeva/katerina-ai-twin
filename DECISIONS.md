@@ -217,11 +217,16 @@ Same pattern as `identity/profile.json` and `identity/hh_searches.json`.
 Importing `connectors.hh_browser.client` at startup does NOT require Playwright installed.
 If `HH_APPLY_ENABLED=false` (default), Playwright is never imported — no ImportError on clean env.
 
-### Execution status orthogonal to action status
-`actions.status` tracks operator approval (pending/approved/rejected/snoozed).
-`actions.execution_status` tracks browser automation (pending/done/failed/captcha/…).
-They are independent: an AUTO_APPLY can be operator-pending and browser-done simultaneously.
-This allows future operator override of already-applied vacancies without schema redesign.
+### apply_runs — execution log separate from actions (decision log)
+`actions` is an immutable decision log: `actions.status` tracks operator approval (pending/approved/rejected/snoozed).
+`apply_runs` is an execution log: one row per browser attempt, with its own `status` (done/failed/captcha/…), `attempt` number, `apply_url`, `started_at`, `finished_at`.
+Separation rationale:
+- Multiple retry attempts each get their own row → full audit history, no data loss
+- `actions` stays clean and immutable; execution churn doesn't pollute the decision record
+- Easier to extend: multiple resumes, screenshots per attempt, multi-channel apply
+Idempotency: `UNIQUE(action_id, attempt)` + `INSERT OR IGNORE` prevents duplicate attempt rows.
+"No second apply after SUCCESS" rule: enforced by `NOT EXISTS (... status='done')` in `get_pending_apply_tasks` — the worker never picks up a task that already has a successful run.
+Queue filter also excludes terminal non-retry statuses: `already_applied`, `manual_required`, `captcha`, `session_expired` — only `failed` (up to MAX_ATTEMPTS=3) is retried.
 
 ### Captcha → stop entire batch (not just skip one vacancy)
 Captcha on HH.ru typically means the IP/session is under suspicion.
@@ -242,7 +247,7 @@ Defaults: 10–30 seconds (aggressive enough to prevent bursts, slow enough not 
 ### Apply daily cap enforced BEFORE browser session opens
 Opens no browser if cap is already reached.
 Emit-first pattern: emit `apply.cap_reached` BEFORE `send_message` (same as scoring/cover-letter caps).
-Cap counts only `execution_status = 'done'` + `date(applied_at) = today` — not attempted, not failed.
+Cap counts only `apply_runs.status = 'done'` + `date(finished_at) = date('now')` — not attempted, not failed.
 
 ### MAX_ATTEMPTS = 3 (not infinite retry)
 Transient failures (page load timeout, flaky element) are retried up to 3 times.

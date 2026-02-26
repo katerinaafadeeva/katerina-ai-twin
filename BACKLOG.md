@@ -58,13 +58,13 @@ Goal: HH + TG feed into one pipeline with scoring, policy and approvals.
 - 40 new tests (240 total)
 
 ### PR-8 Playwright Auto-Apply (DONE) — MVP v1 COMPLETE 🎉
-- Migration 008: execution tracking fields in actions table
+- Migration 008: `apply_runs` table (execution log, separate from `actions` decision log); `UNIQUE(action_id, attempt)`
 - connectors/hh_browser/: client (lazy Playwright), selectors, apply_flow (6 outcomes), bootstrap
-- hh_apply skill: store, worker (cap, delays, batch), notifier, SKILL.md
+- hh_apply skill: store (`save_apply_run`, attempt model, no-duplicate-apply guarantee via apply_runs), worker (cap, delays, batch), notifier, SKILL.md
 - Feature flag HH_APPLY_ENABLED=false; daily cap 10; random delay 10–30s; batch size 5
-- Captcha/session expired → stop batch + notify. Max 3 attempts per task.
+- Captcha/session expired → stop batch + notify. Max 3 attempts per task (only `failed` retried).
 - /resume_apply Telegram command
-- 49 new tests (289 total). Zero LLM calls.
+- 49 new tests (293 total). Zero LLM calls.
 
 ---
 

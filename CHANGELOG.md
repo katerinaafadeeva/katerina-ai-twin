@@ -1,20 +1,20 @@
 ## PR-8: Playwright Auto-Apply (2026-02-26) — MVP v1 COMPLETE 🎉
 
 ### Added
-- `core/migrations/008_actions_execution.sql` — non-destructive ALTER TABLE: `execution_status`, `execution_error`, `execution_attempts`, `applied_at`, `hh_apply_url`; indexes on `execution_status` and `applied_at`
+- `core/migrations/008_actions_execution.sql` — `CREATE TABLE apply_runs` (execution log, separate from actions decision log): `action_id` FK, `attempt`, `status`, `error`, `apply_url`, `started_at`, `finished_at`; `UNIQUE(action_id, attempt)`; indexes on `action_id`, `status`, `finished_at`
 - `connectors/hh_browser/` — new connector:
   - `client.py` — `HHBrowserClient`: async context manager, lazy Playwright import, auth storage state, realistic UA/viewport/locale
   - `selectors.py` — all HH.ru `data-qa` selectors in one file (apply button, submit, captcha, session, already-applied)
   - `apply_flow.py` — `apply_to_vacancy(page, url, cover_letter)` → `ApplyResult(status, error, apply_url)`; 6 statuses: DONE/ALREADY_APPLIED/MANUAL_REQUIRED/CAPTCHA/SESSION_EXPIRED/FAILED
   - `bootstrap.py` — one-time manual auth script, saves storage state to gitignored path
 - `capabilities/career_os/skills/hh_apply/` — new skill:
-  - `store.py` — `get_pending_apply_tasks` (AUTO_APPLY, pending status, <3 attempts, has hh_vacancy_id), `update_action_execution`, `get_today_apply_count`, `was_apply_cap_notification_sent_today`, `get_hh_vacancy_url`
-  - `worker.py` — `hh_apply_worker(bot)`: feature flag guard, daily cap (emit-first), batch cycle, random anti-ban delays, captcha/session stop, per-task try/except, batch summary
+  - `store.py` — `get_pending_apply_tasks` (AUTO_APPLY, pending, <3 attempts via apply_runs JOIN, has hh_vacancy_id, no done/terminal run), `save_apply_run` (INSERT OR IGNORE, one row per attempt), `get_today_apply_count` (apply_runs WHERE status='done' AND date(finished_at)=today), `get_attempt_count`, `was_apply_cap_notification_sent_today`, `get_hh_vacancy_url`
+  - `worker.py` — `hh_apply_worker(bot)`: feature flag guard, daily cap (emit-first), batch cycle, random anti-ban delays, captcha/session stop, per-task try/except; `next_attempt = attempt_count + 1`; saves apply_run row on both success and exception paths
   - `notifier.py` — `notify_apply_done`, `notify_manual_required`, `notify_captcha`, `notify_session_expired`, `notify_batch_summary`, `notify_apply_cap_reached`, `notify_resume_apply`
   - `SKILL.md` — skill contract with anti-ban guarantees and security rules
 - 6 new config fields: `hh_apply_enabled` (false), `apply_daily_cap` (10), `apply_delay_min` (10.0s), `apply_delay_max` (30.0s), `apply_batch_size` (5), `hh_storage_state_path`
 - `/resume_apply` Telegram command — shows pending queue size, triggers immediate cycle
-- **49 new tests** (test_hh_apply_store.py: 26, test_hh_apply_worker.py: 10, test_hh_apply_flow.py: 13); **289 total**
+- **49 new tests** (test_hh_apply_store.py: 29, test_hh_apply_worker.py: 10, test_hh_apply_flow.py: 13); **293 total** (after apply_runs refactor)
 
 ### Changed
 - `connectors/telegram_bot.py` — imports `hh_apply_worker`, `get_pending_apply_tasks`, `notify_resume_apply`; registers `/resume_apply`; `asyncio.create_task(hh_apply_worker(bot))` (no-op when disabled)

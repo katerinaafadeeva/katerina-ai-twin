@@ -39,13 +39,13 @@ End-to-end pipeline:
 
 ## PR-8 summary (2026-02-26)
 
-- Migration 008: `execution_status`, `execution_error`, `execution_attempts`, `applied_at`, `hh_apply_url` in `actions`
+- Migration 008: `apply_runs` table — execution log separate from `actions` decision log. `UNIQUE(action_id, attempt)`, indexes on `action_id` / `status` / `finished_at`.
 - `connectors/hh_browser/`: `client.py` (lazy Playwright, auth storage state), `selectors.py`, `apply_flow.py` (DONE/ALREADY_APPLIED/MANUAL_REQUIRED/CAPTCHA/SESSION_EXPIRED/FAILED), `bootstrap.py`
-- `capabilities/career_os/skills/hh_apply/`: `store.py`, `worker.py`, `notifier.py`, `SKILL.md`
-- Feature flag: `HH_APPLY_ENABLED=false` (safe opt-in). Daily cap `APPLY_DAILY_CAP=10`. Random delays `[10..30]s`. Batch size 5.
+- `capabilities/career_os/skills/hh_apply/`: `store.py` (`save_apply_run`, attempt model, queue filter with no-duplicate-apply guarantee), `worker.py`, `notifier.py`, `SKILL.md`
+- Feature flag: `HH_APPLY_ENABLED=false` (safe opt-in). Daily cap `APPLY_DAILY_CAP=10`. Random delays `[10..30]s`. Batch size 5. Max 3 attempts per task.
 - Captcha → stop batch. Session expired → stop + notify. All browser ops in try/except.
 - `/resume_apply` Telegram command. Emit-first apply cap notification.
-- Tests: **49 new tests, 289 total**, all green. Zero LLM calls. Zero real Playwright in tests.
+- Tests: **49 new tests, 293 total**, all green. Zero LLM calls. Zero real Playwright in tests.
 
 ## Iteration 2 — Post-MVP Roadmap
 
