@@ -210,7 +210,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 )
 
                 # --- Telegram notifications per outcome ---
-                if result.status == ApplyStatus.DONE:
+                if result.status in (ApplyStatus.DONE, ApplyStatus.DONE_WITHOUT_LETTER):
                     done_count += 1
                     if chat_id:
                         await notify_apply_done(bot, chat_id, job_raw_id, result.apply_url)

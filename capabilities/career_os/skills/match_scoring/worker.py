@@ -93,7 +93,7 @@ async def scoring_worker(bot: Bot) -> None:
     while True:
         try:
             with get_conn() as conn:
-                unscored = get_unscored_vacancies(conn)
+                unscored = get_unscored_vacancies(conn, scorer_version=PROMPT_VERSION)
 
             cap_reached_this_cycle = False
             for vacancy in unscored:
@@ -138,6 +138,7 @@ async def scoring_worker(bot: Bot) -> None:
                             input_tokens=0,
                             output_tokens=0,
                             cost_usd=0.0,
+                            scorer_version=PROMPT_VERSION,
                         )
                         conn.commit()
 

@@ -123,16 +123,18 @@ async def main() -> None:
     init_db()
     bot = Bot(token=config.bot_token)
 
+    # Proper async closure — lambda is NOT a coroutine function, so aiogram
+    # would never await the returned coroutine, causing RuntimeWarning.
+    async def _handle_resume_apply(message: Message) -> None:
+        await cmd_resume_apply(message, bot)
+
     # Operator commands
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_limits, Command("limits"))
     dp.message.register(cmd_stats, Command("stats"))
     dp.message.register(cmd_hh_login_help, Command("hh_login"))
     dp.message.register(cmd_hh_login_help, Command("hh_login_help"))
-    dp.message.register(
-        lambda msg: cmd_resume_apply(msg, bot),
-        Command("resume_apply"),
-    )
+    dp.message.register(_handle_resume_apply, Command("resume_apply"))
 
     # Inline button callbacks (approve/reject/snooze)
     dp.callback_query.register(handle_approval_callback)

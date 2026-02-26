@@ -22,6 +22,12 @@ SUBMIT_BUTTON = "[data-qa='vacancy-response-submit-popup']"
 # Close button (used for cleanup after apply)
 MODAL_CLOSE = "[data-qa='vacancy-response-popup-close']"
 
+# --- Post-click success indicators ---
+# Toast / banner: "Отклик отправлен" (direct success without popup)
+SUCCESS_TOAST = "[data-qa='bloko-notification']"
+# Vacancy page re-renders to "already applied" state after quick apply
+RESPONSE_SENT_LABEL = "[data-qa='vacancy-response-sent']"
+
 # --- Auth / session ---
 # Login button — indicates session has expired
 AUTH_LOGIN_BUTTON = "[data-qa='login-button']"

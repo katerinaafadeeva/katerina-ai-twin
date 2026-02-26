@@ -65,7 +65,7 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
           AND NOT EXISTS (
               SELECT 1 FROM apply_runs ar
               WHERE ar.action_id = a.id
-                AND ar.status = 'done'
+                AND ar.status IN ('done', 'done_without_letter')
           )
           AND NOT EXISTS (
               SELECT 1 FROM apply_runs ar
@@ -120,7 +120,7 @@ def get_today_apply_count(conn: sqlite3.Connection) -> int:
     row = conn.execute(
         """
         SELECT COUNT(*) FROM apply_runs
-        WHERE status = 'done'
+        WHERE status IN ('done', 'done_without_letter')
           AND date(finished_at) = date('now')
         """
     ).fetchone()
