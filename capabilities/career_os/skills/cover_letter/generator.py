@@ -1,7 +1,11 @@
-"""Cover letter generation — LLM call with fallback.
+"""Cover letter generation — LLM call with fallback and length retry.
 
 Pure async functions — no DB access. Connection lifecycle owned by caller.
 On any LLM failure, returns the fallback template with is_fallback=True.
+
+Length validator: if LLM returns > 550 characters, one retry is made with
+a strict shorten instruction. The retry result is used regardless of length
+(the LLM is expected to comply); fallback is used only on total LLM failure.
 """
 
 import json
@@ -20,14 +24,32 @@ from core.llm.prompts.cover_letter_v1 import (
     SYSTEM_PROMPT,
     USER_TEMPLATE,
 )
+from core.llm.resume import get_resume_text
 from core.llm.sanitize import prepare_profile_for_llm, sanitize_for_llm
 
 logger = logging.getLogger(__name__)
 
 _MODEL = "claude-haiku-4-5-20251001"
 
+# Target length window (characters)
+_LETTER_MIN_CHARS = 50
+_LETTER_MAX_CHARS = 550  # above this → one retry to shorten
+
 # Module-level cache so the file is read at most once per process
 _fallback_cache: str = ""
+
+_SHORTEN_SYSTEM = (
+    "You are editing a cover letter. Shorten it to exactly 450–500 characters. "
+    "Keep the structure and bullet points. Output the letter text ONLY."
+)
+
+
+def _safe_load_resume() -> str:
+    """Load resume via shared cache; swallow all exceptions (returns '' on failure)."""
+    try:
+        return get_resume_text(config.resume_path)
+    except Exception:
+        return ""
 
 
 def _load_fallback() -> str:
@@ -69,8 +91,9 @@ async def generate_cover_letter(
     profile: Profile,
     score_reasons: str,
     correlation_id: str,
+    resume_text: str = "",
 ) -> Tuple[str, bool, int, int, float]:
-    """Generate a cover letter via LLM.
+    """Generate a cover letter via LLM with length validation and one retry.
 
     Args:
         vacancy_text: Raw vacancy text (will be sanitized).
@@ -78,17 +101,24 @@ async def generate_cover_letter(
         profile:      Operator profile (will be PII-redacted).
         score_reasons: Formatted reasons string from scoring output.
         correlation_id: UUID linking all events for this vacancy cycle.
+        resume_text:  Optional pre-loaded resume text. If empty, loaded
+                      internally from config.resume_path via shared cache.
 
     Returns:
         Tuple of (letter_text, is_fallback, input_tokens, output_tokens, cost_usd).
         On any failure, returns (fallback_text, True, 0, 0, 0.0).
     """
+    if not resume_text:
+        resume_text = _safe_load_resume()
+
     clean_text = sanitize_for_llm(vacancy_text, max_chars=1500)
     profile_dict = prepare_profile_for_llm(profile)
     profile_json = json.dumps(profile_dict, ensure_ascii=False, indent=2)
+    resume_display = resume_text or "(резюме не предоставлено)"
 
     user_message = USER_TEMPLATE.format(
         profile_json=profile_json,
+        resume_text=resume_display,
         vacancy_text=clean_text,
         reasons_text=score_reasons,
     )
@@ -111,12 +141,45 @@ async def generate_cover_letter(
         output_tokens = response.usage.output_tokens
         letter_text = response.content[0].text.strip()
 
-        if len(letter_text) < 50:
+        if len(letter_text) < _LETTER_MIN_CHARS:
             logger.warning(
                 "Cover letter response too short (%d chars) for vacancy %d — using fallback",
                 len(letter_text), vacancy_id,
             )
             return get_fallback_letter(), True, input_tokens, output_tokens, 0.0
+
+        # Length retry: if response is too long, ask LLM to shorten it (once)
+        if len(letter_text) > _LETTER_MAX_CHARS:
+            logger.info(
+                "Cover letter too long (%d chars) for vacancy %d — retrying with shorten instruction",
+                len(letter_text), vacancy_id,
+            )
+            try:
+                shorten_response = await client.messages.create(
+                    model=_MODEL,
+                    max_tokens=600,
+                    temperature=0.2,
+                    system=_SHORTEN_SYSTEM,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": (
+                                f"Сократи до 450–500 символов, сохрани структуру:\n\n{letter_text}"
+                            ),
+                        }
+                    ],
+                )
+                input_tokens += shorten_response.usage.input_tokens
+                output_tokens += shorten_response.usage.output_tokens
+                shortened = shorten_response.content[0].text.strip()
+                if len(shortened) >= _LETTER_MIN_CHARS:
+                    letter_text = shortened
+            except Exception:
+                logger.warning(
+                    "Cover letter shorten retry failed for vacancy %d — using original",
+                    vacancy_id,
+                    exc_info=True,
+                )
 
         duration_ms = int((time.monotonic() - start) * 1000)
 

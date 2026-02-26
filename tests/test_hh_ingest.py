@@ -313,6 +313,8 @@ class TestIngestHhVacancies:
         monkeypatch.setattr(handler_module, "get_conn", lambda: db_conn)
         # Also patch emit to avoid actual DB writes from events
         monkeypatch.setattr(handler_module, "emit", lambda *a, **kw: None)
+        # Disable advanced filter (not under test here — dedup logic is)
+        monkeypatch.setattr(handler_module, "should_score_advanced", lambda *a, **kw: (True, ""))
 
         profile = _make_profile(negative_signals=(), industries_excluded=())
         items = [_make_hh_item(id="111")]
@@ -326,6 +328,8 @@ class TestIngestHhVacancies:
         import capabilities.career_os.skills.vacancy_ingest_hh.handler as handler_module
         monkeypatch.setattr(handler_module, "get_conn", lambda: db_conn)
         monkeypatch.setattr(handler_module, "emit", lambda *a, **kw: None)
+        # Disable advanced filter (not under test here — dedup logic is)
+        monkeypatch.setattr(handler_module, "should_score_advanced", lambda *a, **kw: (True, ""))
 
         profile = _make_profile(negative_signals=(), industries_excluded=())
         items = [_make_hh_item(id="222"), _make_hh_item(id="222")]
