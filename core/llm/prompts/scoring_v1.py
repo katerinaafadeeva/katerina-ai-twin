@@ -29,6 +29,7 @@ Criteria to evaluate (provide one reason entry per criterion):
 4. seniority_match — does the seniority level match the candidate's target seniority and resume level?
 5. industry_fit — is the industry in the preferred list, excluded list, or neutral?
 6. negative_signals — are there any red flags from the candidate's negative_signals list?
+7. resume_signal — quote ONE fragment (≤10 words) from the resume that directly supports or contradicts the vacancy requirements. Do NOT invent text not present in the resume. If the resume is empty or not provided, set matched=false and note="resume not provided".
 """
 
 USER_TEMPLATE = """<profile>
@@ -45,4 +46,4 @@ USER_TEMPLATE = """<profile>
 
 Score this vacancy against the profile AND resume. Output JSON only, no markdown."""
 
-PROMPT_VERSION = "scoring_v1"
+PROMPT_VERSION = "scoring_v2"

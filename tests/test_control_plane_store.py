@@ -215,9 +215,24 @@ class TestGetTodaySummary:
         s = get_today_summary(db_conn)
         required_keys = {
             "total_ingested", "total_scored", "by_action_type",
-            "by_status", "auto_count", "daily_limit", "remaining",
+            "by_status", "decisions_today", "auto_count", "daily_limit", "remaining",
         }
         assert required_keys.issubset(s.keys())
+
+    def test_decisions_today_counts_all_action_types(self, db_conn):
+        """decisions_today = all actions, not just AUTO_QUEUE/AUTO_APPLY."""
+        _insert_action(db_conn, action_type="IGNORE", status="pending", score=2)
+        _insert_action(db_conn, action_type="AUTO_QUEUE", status="pending", score=5)
+        _insert_action(db_conn, action_type="AUTO_APPLY", status="pending", score=6)
+        _insert_action(db_conn, action_type="HOLD", status="pending", score=5)
+        _insert_action(db_conn, action_type="APPROVAL_REQUIRED", status="pending", score=8)
+        s = get_today_summary(db_conn)
+        assert s["decisions_today"] == 5  # all 5 action types counted
+        assert s["auto_count"] == 2       # only AUTO_QUEUE + AUTO_APPLY
+
+    def test_decisions_today_empty_db(self, db_conn):
+        s = get_today_summary(db_conn)
+        assert s["decisions_today"] == 0
 
     def test_remaining_is_daily_limit_minus_auto_count(self, db_conn):
         _insert_action(db_conn, action_type="AUTO_QUEUE", status="pending", score=5)

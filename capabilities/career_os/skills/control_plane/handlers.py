@@ -183,7 +183,7 @@ async def cmd_today(message: Message) -> None:
         f"  ✅ Одобрено: {st['approved']}\n"
         f"  ❌ Отклонено: {st['rejected']}\n"
         f"  ⏸ Отложено: {st['snoozed']}\n\n"
-        f"Лимит решений: {s['auto_count']}/{s['daily_limit']} (осталось {s['remaining']})\n"
+        f"Лимит решений: {s['decisions_today']}/{s['daily_limit']} (осталось {max(0, s['daily_limit'] - s['decisions_today'])})\n"
         f"Отклики HH: {s['applies_done']}/{s['apply_daily_cap']}"
     )
     await message.answer(text)

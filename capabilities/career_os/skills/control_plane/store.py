@@ -148,7 +148,13 @@ def get_today_summary(conn: sqlite3.Connection, apply_daily_cap: int = 0) -> dic
         if s in by_status:
             by_status[s] = r[1]
 
-    # Reuse existing apply_policy logic for auto_count and policy
+    # Total decisions (all action_types) created today — shown in /today as "Лимит решений"
+    row = conn.execute(
+        "SELECT COUNT(*) FROM actions WHERE date(created_at) = date('now')"
+    ).fetchone()
+    decisions_today = row[0] if row else 0
+
+    # auto_count: only AUTO_QUEUE + AUTO_APPLY — used by policy engine internally
     auto_count = get_today_auto_count(conn)
     policy = get_policy(conn)
     daily_limit = policy["daily_limit"]
@@ -161,6 +167,7 @@ def get_today_summary(conn: sqlite3.Connection, apply_daily_cap: int = 0) -> dic
         "total_scored": total_scored,
         "by_action_type": by_action_type,
         "by_status": by_status,
+        "decisions_today": decisions_today,
         "auto_count": auto_count,
         "daily_limit": daily_limit,
         "remaining": remaining,
