@@ -29,6 +29,9 @@ class Config:
     cover_letter_daily_cap: int      # max LLM cover letter calls per day (0 = no cap)
     cover_letter_fallback_path: str  # path to fallback template file
 
+    # Resume for LLM scoring context
+    resume_path: str                 # path to resume.md (plain text, used in scoring prompt)
+
     # HH.ru browser auto-apply
     hh_apply_enabled: bool           # feature flag (default false — safe opt-in)
     apply_daily_cap: int             # max successful applies per day (0 = no cap)
@@ -61,6 +64,8 @@ class Config:
             cover_letter_fallback_path=os.getenv(
                 "COVER_LETTER_FALLBACK_PATH", "identity/cover_letter_fallback.txt"
             ),
+            # Resume
+            resume_path=os.getenv("RESUME_PATH", "identity/resume.md"),
             # HH apply
             hh_apply_enabled=os.getenv("HH_APPLY_ENABLED", "false").lower() in ("true", "1", "yes"),
             apply_daily_cap=int(os.getenv("APPLY_DAILY_CAP", "10")),

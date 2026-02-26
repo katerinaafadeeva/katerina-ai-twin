@@ -162,7 +162,7 @@ async def cmd_today(message: Message) -> None:
         return
 
     with get_conn() as conn:
-        s = get_today_summary(conn)
+        s = get_today_summary(conn, apply_daily_cap=config.apply_daily_cap)
 
     today_str = date.today().strftime("%d.%m.%Y")
     at = s["by_action_type"]
@@ -183,7 +183,8 @@ async def cmd_today(message: Message) -> None:
         f"  ✅ Одобрено: {st['approved']}\n"
         f"  ❌ Отклонено: {st['rejected']}\n"
         f"  ⏸ Отложено: {st['snoozed']}\n\n"
-        f"Лимит: {s['auto_count']}/{s['daily_limit']} (осталось {s['remaining']})"
+        f"Лимит решений: {s['auto_count']}/{s['daily_limit']} (осталось {s['remaining']})\n"
+        f"Отклики HH: {s['applies_done']}/{s['apply_daily_cap']}"
     )
     await message.answer(text)
 
@@ -217,7 +218,7 @@ async def cmd_stats(message: Message) -> None:
         return
 
     with get_conn() as conn:
-        s = get_today_summary(conn)
+        s = get_today_summary(conn, apply_daily_cap=config.apply_daily_cap)
         pending = get_pending_approvals(conn)
 
     # Build /today portion
@@ -240,7 +241,8 @@ async def cmd_stats(message: Message) -> None:
         f"  ✅ Одобрено: {st['approved']}\n"
         f"  ❌ Отклонено: {st['rejected']}\n"
         f"  ⏸ Отложено: {st['snoozed']}\n\n"
-        f"Лимит: {s['auto_count']}/{s['daily_limit']} (осталось {s['remaining']})\n\n"
+        f"Лимит решений: {s['auto_count']}/{s['daily_limit']} (осталось {s['remaining']})\n"
+        f"Отклики HH: {s['applies_done']}/{s['apply_daily_cap']}\n\n"
     )
 
     # Pending approvals section
@@ -248,13 +250,20 @@ async def cmd_stats(message: Message) -> None:
     if not pending:
         text += "Нет вакансий на одобрении"
     else:
+        from capabilities.career_os.skills.control_plane.formatters import extract_vacancy_title
         parts = []
         for row in pending:
-            parts.append(
-                f"#{row['id']} | Вакансия #{row['job_raw_id']} | {row['score']}/10\n"
-                f"  {row['reason']}\n"
-                f"  Создано: {row['created_at']}"
+            title, company = extract_vacancy_title(row.get("raw_text") or "")
+            hh_id = row.get("hh_vacancy_id")
+            hh_url = f"https://hh.ru/vacancy/{hh_id}" if hh_id else None
+            card = (
+                f"#{row['id']} | {title}"
+                + (f" — {company}" if company else "")
+                + f" | {row['score']}/10\n"
+                + f"  {row['reason']}"
+                + (f"\n  🔗 {hh_url}" if hh_url else "")
             )
+            parts.append(card)
         text += "\n\n".join(parts)
 
     await message.answer(text)

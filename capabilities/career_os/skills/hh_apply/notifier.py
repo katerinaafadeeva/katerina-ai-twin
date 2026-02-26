@@ -68,9 +68,7 @@ async def notify_session_expired(
         await bot.send_message(
             chat_id,
             "🔑 Сессия HH.ru истекла — авто-отклики остановлены.\n"
-            "Выполните повторную авторизацию:\n"
-            "  python -m connectors.hh_browser.bootstrap\n"
-            "Затем перезапустите бота.",
+            "Отправьте /hh_login для инструкции по восстановлению.",
         )
     except Exception:
         logger.exception("Failed to send session_expired notification")
