@@ -8,9 +8,10 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from capabilities.career_os.models import Profile
+from capabilities.career_os.skills.vacancy_ingest_hh.filters import should_score_advanced
 from capabilities.career_os.skills.vacancy_ingest_hh.prefilter import should_score
 from capabilities.career_os.skills.vacancy_ingest_hh.store import (
     compute_canonical_key,
@@ -18,6 +19,7 @@ from capabilities.career_os.skills.vacancy_ingest_hh.store import (
     is_hh_vacancy_ingested,
     save_hh_vacancy,
 )
+from core.config import config
 from core.db import get_conn
 from core.events import emit
 
@@ -58,11 +60,12 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text).strip()
 
 
-def normalize_vacancy(item: Dict[str, Any]) -> Dict[str, str]:
+def normalize_vacancy(item: Dict[str, Any]) -> Dict[str, Any]:
     """Extract relevant fields from HH API vacancy item into a flat dict.
 
     Builds raw_text from name + employer + snippet for LLM scoring.
-    Returns dict with: hh_vacancy_id, raw_text, source_url.
+    Returns dict with: hh_vacancy_id, raw_text, source_url,
+    salary_min, salary_currency, has_salary.
     """
     name = item.get("name", "")
 
@@ -77,16 +80,24 @@ def normalize_vacancy(item: Dict[str, Any]) -> Dict[str, str]:
 
     # Salary
     salary_str = ""
+    salary_min: Optional[int] = None
+    salary_currency: str = ""
+    has_salary: bool = False
     salary = item.get("salary")
     if isinstance(salary, dict) and salary:
+        has_salary = True
+        salary_currency = salary.get("currency", "") or ""
+        raw_from = salary.get("from")
+        raw_to = salary.get("to")
+        if raw_from is not None:
+            salary_min = int(raw_from)
         parts = []
-        if salary.get("from"):
-            parts.append(f"от {salary['from']}")
-        if salary.get("to"):
-            parts.append(f"до {salary['to']}")
-        currency = salary.get("currency", "")
+        if raw_from:
+            parts.append(f"от {raw_from}")
+        if raw_to:
+            parts.append(f"до {raw_to}")
         if parts:
-            salary_str = " ".join(parts) + (f" {currency}" if currency else "")
+            salary_str = " ".join(parts) + (f" {salary_currency}" if salary_currency else "")
 
     # Area
     area_name = ""
@@ -122,6 +133,9 @@ def normalize_vacancy(item: Dict[str, Any]) -> Dict[str, str]:
         "hh_vacancy_id": hh_id,
         "raw_text": raw_text,
         "source_url": source_url,
+        "salary_min": salary_min,
+        "salary_currency": salary_currency,
+        "has_salary": has_salary,
     }
 
 
@@ -164,12 +178,24 @@ def ingest_hh_vacancies(
                 counts["duplicate"] += 1
                 continue
 
-        # Pre-filter (deterministic, no LLM cost)
+        # Pre-filter level 1: profile-based negative signals / excluded industries
         passes, reason = should_score(normalized["raw_text"], profile)
         if not passes:
             logger.debug("HH vacancy %s pre-filtered: %s", hh_id, reason)
             counts["filtered"] += 1
-            # Not saved to job_raw — prevents scoring worker from picking it up
+            continue
+
+        # Pre-filter level 2: identity-level advanced filters from hh_filters.json
+        passes, reason = should_score_advanced(
+            vacancy_text=normalized["raw_text"],
+            salary_min=normalized["salary_min"],
+            salary_currency=normalized["salary_currency"],
+            has_salary=normalized["has_salary"],
+            filters_path=config.hh_filters_path,
+        )
+        if not passes:
+            logger.debug("HH vacancy %s advanced-filtered: %s", hh_id, reason)
+            counts["filtered"] += 1
             continue
 
         # Dedup level 2: canonical_key (cross-source TG↔HH)

@@ -5,4 +5,6 @@ __pycache__/
 identity/profile.json
 identity/hh_searches.json
 identity/hh_storage_state.json
+identity/hh_filters.json
 identity/cover_letter_fallback.txt
+identity/resume.md

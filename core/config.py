@@ -27,6 +27,9 @@ class Config:
     # Resume for LLM scoring context
     resume_path: str                 # path to resume.md (plain text, used in scoring prompt)
 
+    # HH advanced pre-filter
+    hh_filters_path: str             # path to hh_filters.json (identity-level salary/keyword filter)
+
     # HH.ru browser auto-apply
     hh_apply_enabled: bool           # feature flag (default false — safe opt-in)
     apply_daily_cap: int             # max successful applies per day (0 = no cap)
@@ -61,6 +64,8 @@ class Config:
             ),
             # Resume
             resume_path=os.getenv("RESUME_PATH", "identity/resume.md"),
+            # HH advanced pre-filter
+            hh_filters_path=os.getenv("HH_FILTERS_PATH", "identity/hh_filters.json"),
             # HH apply
             hh_apply_enabled=os.getenv("HH_APPLY_ENABLED", "false").lower() in ("true", "1", "yes"),
             apply_daily_cap=int(os.getenv("APPLY_DAILY_CAP", "10")),
