@@ -29,6 +29,14 @@ class Config:
     cover_letter_daily_cap: int      # max LLM cover letter calls per day (0 = no cap)
     cover_letter_fallback_path: str  # path to fallback template file
 
+    # HH.ru browser auto-apply
+    hh_apply_enabled: bool           # feature flag (default false — safe opt-in)
+    apply_daily_cap: int             # max successful applies per day (0 = no cap)
+    apply_delay_min: float           # min seconds between applies (anti-ban)
+    apply_delay_max: float           # max seconds between applies (anti-ban)
+    apply_batch_size: int            # max applies per worker cycle
+    hh_storage_state_path: str       # path to Playwright browser storage state (gitignored)
+
     @classmethod
     def from_env(cls) -> "Config":
         ids_raw = os.getenv("ALLOWED_TELEGRAM_IDS", "")
@@ -52,6 +60,15 @@ class Config:
             cover_letter_daily_cap=int(os.getenv("COVER_LETTER_DAILY_CAP", "50")),
             cover_letter_fallback_path=os.getenv(
                 "COVER_LETTER_FALLBACK_PATH", "identity/cover_letter_fallback.txt"
+            ),
+            # HH apply
+            hh_apply_enabled=os.getenv("HH_APPLY_ENABLED", "false").lower() in ("true", "1", "yes"),
+            apply_daily_cap=int(os.getenv("APPLY_DAILY_CAP", "10")),
+            apply_delay_min=float(os.getenv("APPLY_DELAY_MIN", "10.0")),
+            apply_delay_max=float(os.getenv("APPLY_DELAY_MAX", "30.0")),
+            apply_batch_size=int(os.getenv("APPLY_BATCH_SIZE", "5")),
+            hh_storage_state_path=os.getenv(
+                "HH_STORAGE_STATE_PATH", "identity/hh_storage_state.json"
             ),
         )
 
