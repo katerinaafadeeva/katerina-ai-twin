@@ -49,7 +49,7 @@ def _make_task(action_id=1, job_raw_id=10, hh_vacancy_id="111", cover_letter="П
         "hh_vacancy_id": hh_vacancy_id,
         "cover_letter": cover_letter,
         "correlation_id": "corr-123",
-        "execution_attempts": 0,
+        "attempt_count": 0,  # number of existing apply_runs for this action
     }
 
 
@@ -160,7 +160,7 @@ class TestApplyCycleOutcomes:
              patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
              patch("capabilities.career_os.skills.hh_apply.worker.get_today_apply_count", return_value=0), \
              patch("capabilities.career_os.skills.hh_apply.worker.get_pending_apply_tasks", return_value=[task]), \
-             patch("capabilities.career_os.skills.hh_apply.worker.update_action_execution") as mock_update, \
+             patch("capabilities.career_os.skills.hh_apply.worker.save_apply_run") as mock_save, \
              patch("capabilities.career_os.skills.hh_apply.worker.emit") as mock_emit, \
              patch("capabilities.career_os.skills.hh_apply.worker.apply_to_vacancy", new_callable=AsyncMock, return_value=apply_result), \
              patch("capabilities.career_os.skills.hh_apply.worker.HHBrowserClient") as MockClient, \
@@ -179,10 +179,11 @@ class TestApplyCycleOutcomes:
             from capabilities.career_os.skills.hh_apply.worker import _run_apply_cycle
             await _run_apply_cycle(mock_bot)
 
-        mock_update.assert_called_once()
-        call_kwargs = mock_update.call_args
-        assert call_kwargs[1]["execution_status"] == "done"
-        assert call_kwargs[1]["applied_at"] is not None
+        mock_save.assert_called_once()
+        call_kwargs = mock_save.call_args
+        assert call_kwargs[1]["status"] == "done"
+        assert call_kwargs[1]["finished_at"] is not None
+        assert call_kwargs[1]["attempt"] == 1  # attempt_count=0 → next=1
 
         mock_emit.assert_called_once_with(
             "apply.done",
@@ -206,7 +207,7 @@ class TestApplyCycleOutcomes:
              patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
              patch("capabilities.career_os.skills.hh_apply.worker.get_today_apply_count", return_value=0), \
              patch("capabilities.career_os.skills.hh_apply.worker.get_pending_apply_tasks", return_value=tasks), \
-             patch("capabilities.career_os.skills.hh_apply.worker.update_action_execution"), \
+             patch("capabilities.career_os.skills.hh_apply.worker.save_apply_run"), \
              patch("capabilities.career_os.skills.hh_apply.worker.emit"), \
              patch("capabilities.career_os.skills.hh_apply.worker.apply_to_vacancy", new_callable=AsyncMock, return_value=captcha_result), \
              patch("capabilities.career_os.skills.hh_apply.worker.HHBrowserClient") as MockClient, \
@@ -241,7 +242,7 @@ class TestApplyCycleOutcomes:
              patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
              patch("capabilities.career_os.skills.hh_apply.worker.get_today_apply_count", return_value=0), \
              patch("capabilities.career_os.skills.hh_apply.worker.get_pending_apply_tasks", return_value=[_make_task()]), \
-             patch("capabilities.career_os.skills.hh_apply.worker.update_action_execution"), \
+             patch("capabilities.career_os.skills.hh_apply.worker.save_apply_run"), \
              patch("capabilities.career_os.skills.hh_apply.worker.emit"), \
              patch("capabilities.career_os.skills.hh_apply.worker.apply_to_vacancy", new_callable=AsyncMock, return_value=session_result), \
              patch("capabilities.career_os.skills.hh_apply.worker.HHBrowserClient") as MockClient, \

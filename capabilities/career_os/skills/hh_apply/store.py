@@ -3,14 +3,17 @@
 All functions accept sqlite3.Connection. No get_conn() inside — caller owns lifecycle.
 No LLM calls — pure SQL.
 
-Execution status values:
-  pending         — not yet attempted (NULL or 'pending' in DB)
+Schema separation:
+  actions    = DECISION log (policy engine output, immutable after creation)
+  apply_runs = EXECUTION log (one row per browser attempt, full history)
+
+apply_runs.status values:
   done            — application submitted successfully
-  already_applied — already applied before this cycle
+  already_applied — already applied before this cycle (not a retry candidate)
   manual_required — apply button absent; operator must act manually
   captcha         — captcha detected; batch stopped
   session_expired — auth state expired; re-bootstrap required
-  failed          — unexpected error (will retry up to 3 times)
+  failed          — unexpected error (will be retried up to MAX_ATTEMPTS)
 """
 
 import logging
@@ -19,7 +22,7 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Max attempts before giving up on a task
+# Max browser attempts per action before giving up
 MAX_ATTEMPTS = 3
 
 # HH vacancy URL pattern
@@ -31,11 +34,12 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
 
     Criteria:
     - action_type = 'AUTO_APPLY'
-    - status = 'pending' (not yet approved/rejected/snoozed by operator)
-    - execution_status IS NULL OR execution_status = 'pending' OR execution_status = 'failed'
-    - execution_attempts < MAX_ATTEMPTS (3)
+    - status = 'pending' (not yet operator-approved/rejected/snoozed)
+    - No successful apply_run yet (execution_status != 'done')
+    - Attempt count in apply_runs < MAX_ATTEMPTS
     - job_raw has hh_vacancy_id (needed to construct apply URL)
 
+    Returns attempt_count in each row so caller can compute next attempt number.
     Ordered by created_at ASC (oldest first).
     """
     rows = conn.execute(
@@ -44,19 +48,32 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
             a.id            AS action_id,
             a.job_raw_id,
             a.correlation_id,
-            a.execution_attempts,
             jr.hh_vacancy_id,
-            cl.letter_text  AS cover_letter
+            cl.letter_text  AS cover_letter,
+            COALESCE(r.attempt_count, 0) AS attempt_count
         FROM actions a
         JOIN job_raw jr ON jr.id = a.job_raw_id
         LEFT JOIN cover_letters cl ON cl.action_id = a.id
+        LEFT JOIN (
+            SELECT action_id, COUNT(*) AS attempt_count
+            FROM apply_runs
+            GROUP BY action_id
+        ) r ON r.action_id = a.id
         WHERE a.action_type = 'AUTO_APPLY'
           AND a.status = 'pending'
-          AND (a.execution_status IS NULL
-               OR a.execution_status = 'pending'
-               OR a.execution_status = 'failed')
-          AND COALESCE(a.execution_attempts, 0) < ?
           AND jr.hh_vacancy_id IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM apply_runs ar
+              WHERE ar.action_id = a.id
+                AND ar.status = 'done'
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM apply_runs ar
+              WHERE ar.action_id = a.id
+                AND ar.status IN ('already_applied', 'manual_required',
+                                  'captcha', 'session_expired')
+          )
+          AND COALESCE(r.attempt_count, 0) < ?
         ORDER BY a.created_at ASC
         LIMIT ?
         """,
@@ -65,42 +82,56 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
     return [dict(r) for r in rows]
 
 
-def update_action_execution(
+def save_apply_run(
     conn: sqlite3.Connection,
     action_id: int,
-    execution_status: str,
+    attempt: int,
+    status: str,
     error: Optional[str] = None,
-    applied_at: Optional[str] = None,
     apply_url: Optional[str] = None,
-) -> None:
-    """Update execution tracking fields and increment attempts counter."""
-    conn.execute(
+    finished_at: Optional[str] = None,
+) -> int:
+    """Insert a new apply_run record. Returns row-id.
+
+    started_at defaults to datetime('now') in the DB column definition.
+    finished_at should be set to the completion time.
+    """
+    cursor = conn.execute(
         """
-        UPDATE actions
-        SET execution_status    = ?,
-            execution_error     = ?,
-            applied_at          = ?,
-            hh_apply_url        = ?,
-            execution_attempts  = COALESCE(execution_attempts, 0) + 1
-        WHERE id = ?
+        INSERT OR IGNORE INTO apply_runs
+            (action_id, attempt, status, error, apply_url, finished_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (execution_status, error, applied_at, apply_url, action_id),
+        (action_id, attempt, status, error, apply_url, finished_at),
     )
+    rowid = cursor.lastrowid if cursor.rowcount > 0 else 0
     logger.debug(
-        "Action %d execution_status=%s attempts+1",
-        action_id,
-        execution_status,
+        "apply_run saved: action_id=%d attempt=%d status=%s rowid=%d",
+        action_id, attempt, status, rowid,
     )
+    return rowid
 
 
 def get_today_apply_count(conn: sqlite3.Connection) -> int:
-    """Count successful applies today (UTC). Used to enforce APPLY_DAILY_CAP."""
+    """Count successful applies today (UTC). Used to enforce APPLY_DAILY_CAP.
+
+    Counts apply_runs with status='done' and date(finished_at)=today.
+    """
     row = conn.execute(
         """
-        SELECT COUNT(*) FROM actions
-        WHERE execution_status = 'done'
-          AND date(applied_at) = date('now')
+        SELECT COUNT(*) FROM apply_runs
+        WHERE status = 'done'
+          AND date(finished_at) = date('now')
         """
+    ).fetchone()
+    return row[0] if row else 0
+
+
+def get_attempt_count(conn: sqlite3.Connection, action_id: int) -> int:
+    """Count existing apply_runs for a given action (all statuses)."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM apply_runs WHERE action_id = ?",
+        (action_id,),
     ).fetchone()
     return row[0] if row else 0
 

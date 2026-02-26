@@ -1,7 +1,7 @@
 """Async background worker for hh_apply skill.
 
-Polls for AUTO_APPLY actions with pending execution status, submits applications
-via Playwright, updates DB, emits events, sends Telegram notifications.
+Polls for AUTO_APPLY actions with no successful apply_run yet, submits applications
+via Playwright, persists results in apply_runs, emits events, sends TG notifications.
 
 Design rules:
 - Feature flag: exits immediately if HH_APPLY_ENABLED=false
@@ -12,6 +12,7 @@ Design rules:
 - Batch size cap per cycle
 - Captcha → stop entire batch immediately (human action required)
 - Session expired → stop entire batch, notify operator
+- Each attempt saved as a separate apply_run row (full history)
 """
 
 import asyncio
@@ -26,7 +27,7 @@ from capabilities.career_os.skills.hh_apply.store import (
     get_hh_vacancy_url,
     get_pending_apply_tasks,
     get_today_apply_count,
-    update_action_execution,
+    save_apply_run,
     was_apply_cap_notification_sent_today,
 )
 from capabilities.career_os.skills.hh_apply.notifier import (
@@ -84,7 +85,7 @@ async def hh_apply_worker(bot: Bot) -> None:
 
 
 async def _run_apply_cycle(bot: Bot) -> None:
-    """Execute one apply cycle: pick tasks → browser → update DB → notify."""
+    """Execute one apply cycle: pick tasks → browser → save apply_run → notify."""
     chat_id = config.allowed_telegram_ids[0] if config.allowed_telegram_ids else None
 
     # --- Daily cap check (before any browser work) ---
@@ -97,7 +98,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 today_count,
                 config.apply_daily_cap,
             )
-            # Emit-first durability (same pattern as scoring cap)
+            # Emit-first durability (same pattern as scoring cap and HOLD summary)
             with get_conn() as conn:
                 already_notified = was_apply_cap_notification_sent_today(conn)
             if not already_notified and chat_id:
@@ -135,8 +136,11 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 hh_vacancy_id = task["hh_vacancy_id"]
                 cover_letter = task.get("cover_letter") or ""
                 correlation_id = task.get("correlation_id") or str(uuid4())
+                # Next attempt number = existing runs + 1
+                next_attempt = task["attempt_count"] + 1
 
                 vacancy_url = get_hh_vacancy_url(hh_vacancy_id)
+                finished_at = _now_utc()
 
                 try:
                     page = await context.new_page()
@@ -147,28 +151,29 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 except Exception as exc:
                     logger.exception("Browser page failed for vacancy %d", job_raw_id)
                     with get_conn() as conn:
-                        update_action_execution(
+                        save_apply_run(
                             conn,
-                            action_id,
-                            execution_status="failed",
+                            action_id=action_id,
+                            attempt=next_attempt,
+                            status="failed",
                             error=str(exc)[:500],
                             apply_url=vacancy_url,
+                            finished_at=finished_at,
                         )
                         conn.commit()
                     failed_count += 1
                     continue
 
-                # --- Process result ---
-                applied_at = _now_utc() if result.status == ApplyStatus.DONE else None
-
+                # --- Persist apply_run (one row per attempt) ---
                 with get_conn() as conn:
-                    update_action_execution(
+                    save_apply_run(
                         conn,
-                        action_id,
-                        execution_status=result.status.value,
+                        action_id=action_id,
+                        attempt=next_attempt,
+                        status=result.status.value,
                         error=result.error or None,
-                        applied_at=applied_at,
                         apply_url=result.apply_url,
+                        finished_at=finished_at,
                     )
                     conn.commit()
 
