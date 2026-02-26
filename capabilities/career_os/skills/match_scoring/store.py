@@ -32,7 +32,7 @@ def get_unscored_vacancies(
     """
     cursor = conn.execute(
         """
-        SELECT jr.id, jr.raw_text, jr.source, jr.created_at
+        SELECT jr.id, jr.raw_text, jr.source, jr.created_at, jr.hh_vacancy_id
         FROM job_raw jr
         LEFT JOIN job_scores js
             ON jr.id = js.job_raw_id AND js.scorer_version = ?

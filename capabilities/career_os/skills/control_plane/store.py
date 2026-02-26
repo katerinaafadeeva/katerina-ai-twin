@@ -13,6 +13,7 @@ from capabilities.career_os.skills.apply_policy.store import (
     get_policy,
     get_today_auto_count,
 )
+from capabilities.career_os.skills.hh_apply.store import get_today_apply_count
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def update_action_status(
     return updated
 
 
-def get_today_summary(conn: sqlite3.Connection) -> dict:
+def get_today_summary(conn: sqlite3.Connection, apply_daily_cap: int = 0) -> dict:
     """Aggregate stats for the /today operator command.
 
     Counts are scoped to today's UTC date.
@@ -93,10 +94,13 @@ def get_today_summary(conn: sqlite3.Connection) -> dict:
 
     Args:
         conn: Open SQLite connection.
+        apply_daily_cap: APPLY_DAILY_CAP value from config (passed by caller to
+            avoid importing config here). Used only for display in the returned dict.
 
     Returns:
         Dict with keys: total_ingested, total_scored, by_action_type,
-        by_status, auto_count, daily_limit, remaining.
+        by_status, auto_count, daily_limit, remaining,
+        applies_done, apply_daily_cap.
     """
     # Total vacancies ingested today
     row = conn.execute(
@@ -150,6 +154,8 @@ def get_today_summary(conn: sqlite3.Connection) -> dict:
     daily_limit = policy["daily_limit"]
     remaining = max(0, daily_limit - auto_count)
 
+    applies_done = get_today_apply_count(conn)
+
     return {
         "total_ingested": total_ingested,
         "total_scored": total_scored,
@@ -158,6 +164,8 @@ def get_today_summary(conn: sqlite3.Connection) -> dict:
         "auto_count": auto_count,
         "daily_limit": daily_limit,
         "remaining": remaining,
+        "applies_done": applies_done,
+        "apply_daily_cap": apply_daily_cap,
     }
 
 
@@ -170,15 +178,18 @@ def get_pending_approvals(conn: sqlite3.Connection) -> List[dict]:
         conn: Open SQLite connection.
 
     Returns:
-        List of dicts with keys: id, job_raw_id, score, reason, created_at.
+        List of dicts with keys: id, job_raw_id, score, reason, created_at,
+        raw_text, hh_vacancy_id.
     """
     rows = conn.execute(
         """
-        SELECT id, job_raw_id, score, reason, created_at
-          FROM actions
-         WHERE action_type = 'APPROVAL_REQUIRED'
-           AND status = 'pending'
-         ORDER BY created_at DESC
+        SELECT a.id, a.job_raw_id, a.score, a.reason, a.created_at,
+               jr.raw_text, jr.hh_vacancy_id
+          FROM actions a
+          JOIN job_raw jr ON jr.id = a.job_raw_id
+         WHERE a.action_type = 'APPROVAL_REQUIRED'
+           AND a.status = 'pending'
+         ORDER BY a.created_at DESC
         """
     ).fetchall()
     return [dict(r) for r in rows]

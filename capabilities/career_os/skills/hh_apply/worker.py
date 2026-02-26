@@ -17,6 +17,7 @@ Design rules:
 
 import asyncio
 import logging
+import os
 import random
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -67,6 +68,23 @@ async def hh_apply_worker(bot: Bot) -> None:
     if not config.hh_apply_enabled:
         logger.info("HH Apply worker disabled (HH_APPLY_ENABLED=false) — exiting")
         return
+
+    # Warn if storage state file is missing (worker continues — file may appear later)
+    if not os.path.exists(config.hh_storage_state_path):
+        logger.warning(
+            "HH_APPLY_ENABLED=true but storage state not found at %s. "
+            "Run: python -m connectors.hh_browser.bootstrap",
+            config.hh_storage_state_path,
+        )
+        if config.allowed_telegram_ids:
+            try:
+                await bot.send_message(
+                    config.allowed_telegram_ids[0],
+                    "⚠️ Авто-отклики включены, но сессия HH.ru не найдена.\n"
+                    "Отправьте /hh_login для инструкции.",
+                )
+            except Exception:
+                pass
 
     logger.info(
         "HH Apply worker started — cap=%d delay=[%.1f..%.1f]s batch=%d",

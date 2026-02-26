@@ -13,6 +13,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from capabilities.career_os.models import Profile
 from capabilities.career_os.skills.apply_policy.engine import ActionType, evaluate_policy
+from capabilities.career_os.skills.control_plane.formatters import extract_vacancy_title
 from capabilities.career_os.skills.apply_policy.store import (
     get_policy,
     get_today_auto_count,
@@ -240,22 +241,33 @@ async def scoring_worker(bot: Bot) -> None:
                     if config.allowed_telegram_ids:
                         chat_id = config.allowed_telegram_ids[0]
                         emoji = _score_emoji(result.score)
+                        raw_text = vacancy.get("raw_text") or ""
+                        title, company = extract_vacancy_title(raw_text)
+                        hh_vacancy_id = vacancy.get("hh_vacancy_id")
+                        hh_url = (
+                            f"https://hh.ru/vacancy/{hh_vacancy_id}"
+                            if hh_vacancy_id
+                            else None
+                        )
+                        title_line = title + (f" — {company}" if company else "")
 
                         if decision.action_type == ActionType.IGNORE:
                             pass  # silent — no notification
 
                         elif decision.action_type == ActionType.AUTO_APPLY:
+                            hh_suffix = f"\n🔗 {hh_url}" if hh_url else ""
                             await bot.send_message(
                                 chat_id,
-                                f"{emoji} Автоотклик HH #{job_raw_id}: {result.score}/10\n"
-                                f"{decision.reason}",
+                                f"{emoji} Автоотклик HH: {title_line}\n"
+                                f"Score: {result.score}/10 | {decision.reason}"
+                                f"{hh_suffix}",
                             )
 
                         elif decision.action_type == ActionType.AUTO_QUEUE:
                             await bot.send_message(
                                 chat_id,
-                                f"{emoji} В очередь #{job_raw_id}: {result.score}/10\n"
-                                f"{decision.reason}",
+                                f"{emoji} В очередь: {title_line}\n"
+                                f"Score: {result.score}/10 | {decision.reason}",
                             )
 
                         elif decision.action_type == ActionType.APPROVAL_REQUIRED:
@@ -266,6 +278,7 @@ async def scoring_worker(bot: Bot) -> None:
                                     preview += "..."
                                 cl_preview = f"\n\n📝 Сопроводительное:\n{preview}"
 
+                            hh_suffix = f"\n🔗 {hh_url}" if hh_url else ""
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                                 [
                                     InlineKeyboardButton(text="✅ Одобрить", callback_data=f"approve:{action_rowid}"),
@@ -277,9 +290,10 @@ async def scoring_worker(bot: Bot) -> None:
                             ])
                             await bot.send_message(
                                 chat_id,
-                                f"{emoji} Требует одобрения #{job_raw_id}: {result.score}/10\n"
-                                f"{decision.reason}\n"
+                                f"{emoji} {title_line}\n"
+                                f"Score: {result.score}/10 | {decision.reason}\n"
                                 f"{result.explanation}"
+                                f"{hh_suffix}"
                                 f"{cl_preview}",
                                 reply_markup=keyboard,
                             )

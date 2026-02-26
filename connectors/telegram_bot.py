@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -59,6 +60,47 @@ async def handle_forward(message: Message) -> None:
         await message.answer(f"Уже в базе: #{job_raw_id}")
 
 
+async def cmd_hh_login_help(message: Message) -> None:
+    """/hh_login and /hh_login_help — HH.ru session status and bootstrap instructions.
+
+    Does NOT open a browser. Headless=False is only possible locally via bootstrap.py.
+    """
+    if not is_authorized(message):
+        return
+
+    storage_path = config.hh_storage_state_path
+    file_exists = os.path.exists(storage_path)
+    apply_enabled = config.hh_apply_enabled
+
+    status_line = (
+        f"✅ Файл сессии найден: {storage_path}"
+        if file_exists
+        else f"❌ Файл сессии отсутствует: {storage_path}"
+    )
+    apply_line = (
+        "✅ включены (HH_APPLY_ENABLED=true)"
+        if apply_enabled
+        else "⚠️ выключены (HH_APPLY_ENABLED=false — включите после авторизации)"
+    )
+
+    text = (
+        f"🔑 Авторизация HH.ru\n\n"
+        f"Статус: {status_line}\n"
+        f"Авто-отклики: {apply_line}\n\n"
+        f"Как создать/обновить сессию:\n"
+        f"1. Остановите бота (Ctrl+C)\n"
+        f"2. В терминале выполните:\n"
+        f"   python -m connectors.hh_browser.bootstrap\n"
+        f"3. В открывшемся браузере войдите на hh.ru\n"
+        f"4. Нажмите Enter в терминале\n"
+        f"5. В .env установите HH_APPLY_ENABLED=true\n"
+        f"6. Запустите бота снова\n\n"
+        f"Сессия действует 2-4 недели.\n"
+        f"При истечении бот пришлёт уведомление с этой инструкцией."
+    )
+    await message.answer(text)
+
+
 async def cmd_resume_apply(message: Message, bot: Bot) -> None:
     """/resume_apply — show queue size and trigger immediate apply cycle."""
     if not is_authorized(message):
@@ -85,6 +127,8 @@ async def main() -> None:
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_limits, Command("limits"))
     dp.message.register(cmd_stats, Command("stats"))
+    dp.message.register(cmd_hh_login_help, Command("hh_login"))
+    dp.message.register(cmd_hh_login_help, Command("hh_login_help"))
     dp.message.register(
         lambda msg: cmd_resume_apply(msg, bot),
         Command("resume_apply"),
