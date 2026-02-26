@@ -73,23 +73,72 @@ class Profile:
         with open(path, "r", encoding="utf-8") as fh:
             raw: dict = json.load(fh)
 
+        # ---------- dual-schema support ----------
+        # Old schema: geo_preferences / salary / required_skills / negative_signals / …
+        # New schema: seniority_target / hard_skills / domains_preferred / avoid.* / must_have.*
+
         geo = raw.get("geo_preferences", {})
         salary = raw.get("salary", {})
+        avoid = raw.get("avoid", {})
+        must_have = raw.get("must_have", {})
+
+        # Seniority: prefer new key "seniority_target", fall back to old "target_seniority"
+        target_seniority = tuple(
+            raw.get("seniority_target") or raw.get("target_seniority") or []
+        )
+
+        # Geo: old schema only (new profile.json omits it → empty)
+        geo_cities = tuple(geo.get("cities", []))
+        relocation = bool(geo.get("relocation", False))
+
+        # Salary: old schema uses salary.min, new uses must_have.salary_min_rub
+        salary_min = int(
+            salary.get("min") or must_have.get("salary_min_rub") or 0
+        )
+        salary_currency = str(salary.get("currency", "RUB"))
+
+        # Skills: prefer "required_skills" (old schema), fall back to "hard_skills"
+        required_skills = tuple(
+            raw.get("required_skills") or raw.get("hard_skills") or []
+        )
+        bonus_skills = tuple(raw.get("bonus_skills") or [])
+
+        # Negative signals: old schema top-level, new schema under avoid.keywords_any + avoid.domains
+        negative_signals = tuple(
+            raw.get("negative_signals")
+            or (avoid.get("keywords_any", []) + avoid.get("domains", []))
+        )
+
+        # Industries: old schema uses "industries_*", new uses "domains_*"
+        industries_preferred = tuple(
+            raw.get("industries_preferred") or raw.get("domains_preferred") or []
+        )
+        industries_excluded = tuple(
+            raw.get("industries_excluded") or avoid.get("domains", [])
+        )
+
+        # Languages: old schema is a list ["Russian", "English"],
+        # new schema is a dict {"ru": "native", "en": "C1"}
+        raw_langs = raw.get("languages") or []
+        if isinstance(raw_langs, dict):
+            languages = tuple(raw_langs.keys())
+        else:
+            languages = tuple(raw_langs)
 
         return cls(
-            target_roles=tuple(raw["target_roles"]),
-            target_seniority=tuple(raw["target_seniority"]),
-            work_format=tuple(raw["work_format"]),
-            geo_cities=tuple(geo.get("cities", [])),
-            relocation=bool(geo.get("relocation", False)),
-            salary_min=int(salary.get("min", 0)),
-            salary_currency=str(salary.get("currency", "RUB")),
-            required_skills=tuple(raw["required_skills"]),
-            bonus_skills=tuple(raw["bonus_skills"]),
-            negative_signals=tuple(raw["negative_signals"]),
-            industries_preferred=tuple(raw["industries_preferred"]),
-            industries_excluded=tuple(raw["industries_excluded"]),
-            languages=tuple(raw["languages"]),
+            target_roles=tuple(raw.get("target_roles") or []),
+            target_seniority=target_seniority,
+            work_format=tuple(raw.get("work_format") or []),
+            geo_cities=geo_cities,
+            relocation=relocation,
+            salary_min=salary_min,
+            salary_currency=salary_currency,
+            required_skills=required_skills,
+            bonus_skills=bonus_skills,
+            negative_signals=negative_signals,
+            industries_preferred=industries_preferred,
+            industries_excluded=industries_excluded,
+            languages=languages,
         )
 
     # ------------------------------------------------------------------

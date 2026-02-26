@@ -120,7 +120,9 @@ class TestGetFallbackLetter:
 class TestGenerateCoverLetter:
     def setup_method(self):
         import capabilities.career_os.skills.cover_letter.generator as gen
+        import core.llm.resume as resume_mod
         gen._fallback_cache = ""
+        resume_mod._cache.clear()
 
     @pytest.mark.asyncio
     async def test_success_returns_letter_text(self, monkeypatch):
@@ -272,3 +274,68 @@ class TestGenerateCoverLetter:
 
         assert captured_messages
         assert "\u200b" not in captured_messages[0]
+
+    @pytest.mark.asyncio
+    async def test_retries_when_response_too_long(self):
+        """If first response > 550 chars, generator makes a second (shorten) call."""
+        import capabilities.career_os.skills.cover_letter.generator as gen
+        gen._fallback_cache = "Запасное письмо для теста."
+
+        long_letter = "А" * 600   # 600 chars — triggers shorten retry
+        short_letter = "Б" * 450  # 450 chars — within target
+
+        mock_response_1 = _mock_anthropic_response(long_letter)
+        mock_response_2 = _mock_anthropic_response(short_letter)
+
+        with patch("capabilities.career_os.skills.cover_letter.generator.anthropic.AsyncAnthropic") as MockClient:
+            mock_instance = AsyncMock()
+            MockClient.return_value = mock_instance
+            mock_instance.messages.create = AsyncMock(
+                side_effect=[mock_response_1, mock_response_2]
+            )
+
+            with patch("capabilities.career_os.skills.cover_letter.generator.emit"):
+                result = await gen.generate_cover_letter(
+                    vacancy_text="Product Manager vacancy",
+                    vacancy_id=6,
+                    profile=_make_profile(),
+                    score_reasons="- role: ✓ match",
+                    correlation_id="test-corr-6",
+                    resume_text="PM resume text",
+                )
+
+        text, is_fb, _, _, _ = result
+        assert text == short_letter          # retry result used
+        assert is_fb is False
+        assert mock_instance.messages.create.call_count == 2  # original + shorten retry
+
+    @pytest.mark.asyncio
+    async def test_uses_provided_resume_text_in_prompt(self):
+        """When resume_text is explicitly provided, it appears in the user message."""
+        import capabilities.career_os.skills.cover_letter.generator as gen
+
+        letter = "C" * 100
+        mock_response = _mock_anthropic_response(letter)
+        captured_messages = []
+
+        def capture_create(**kwargs):
+            captured_messages.append(kwargs["messages"][0]["content"])
+            return mock_response
+
+        with patch("capabilities.career_os.skills.cover_letter.generator.anthropic.AsyncAnthropic") as MockClient:
+            mock_instance = AsyncMock()
+            MockClient.return_value = mock_instance
+            mock_instance.messages.create = AsyncMock(side_effect=capture_create)
+
+            with patch("capabilities.career_os.skills.cover_letter.generator.emit"):
+                await gen.generate_cover_letter(
+                    vacancy_text="PM vacancy",
+                    vacancy_id=7,
+                    profile=_make_profile(),
+                    score_reasons="",
+                    correlation_id="test-corr-7",
+                    resume_text="Опыт 7 лет в управлении проектами",
+                )
+
+        assert captured_messages
+        assert "Опыт 7 лет" in captured_messages[0]

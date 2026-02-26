@@ -6,64 +6,27 @@ calling worker (worker.py).
 
 import json
 import logging
-import os
-from typing import Optional, Tuple
 
 from core.config import config
 from core.llm.client import FALLBACK_MODEL, call_llm_scoring
 from core.llm.prompts.scoring_v1 import PROMPT_VERSION, SYSTEM_PROMPT, USER_TEMPLATE
+from core.llm.resume import get_resume_text
 from core.llm.sanitize import prepare_profile_for_llm, sanitize_for_llm
 from core.llm.schemas import ScoringOutput
 from capabilities.career_os.models import Profile
 
 logger = logging.getLogger(__name__)
 
-# Resume cache: (content, mtime_at_load). Re-read automatically if mtime changes.
-# Empty string means "no resume" — scoring continues without resume context.
-# Cache is invalidated on next call when the file's mtime changes (e.g. after edit).
-# Restart is NOT required when resume.md changes.
-_resume_cache: Tuple[str, Optional[float]] = ("", None)
-
-_RESUME_MAX_CHARS = 20_000
-
 
 def _load_resume() -> str:
-    """Load resume from RESUME_PATH. Returns empty string on any failure.
+    """Load resume via shared mtime-based cache (core.llm.resume).
 
-    Uses mtime-based cache: if the file changes on disk the next scoring
-    call will re-read it automatically without a bot restart.
-    Returns empty string (not an error) when the file is absent — scoring
-    continues without resume context and a warning is logged.
+    Thin wrapper kept for backward compatibility with callers and tests
+    that monkeypatch ``h._load_resume``.
+    Returns empty string when file is absent — scoring continues without
+    resume context.
     """
-    global _resume_cache
-    path = config.resume_path
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
-        logger.warning(
-            "Resume file not found at %r — scoring without resume context", path
-        )
-        _resume_cache = ("", None)
-        return ""
-
-    cached_text, cached_mtime = _resume_cache
-    if cached_mtime == mtime:
-        return cached_text
-
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            text = f.read().strip()
-    except Exception as exc:
-        logger.warning(
-            "Failed to read resume file %r: %s — scoring without resume context", path, exc
-        )
-        _resume_cache = ("", mtime)
-        return ""
-
-    text = text[:_RESUME_MAX_CHARS]
-    _resume_cache = (text, mtime)
-    logger.info("Resume loaded/refreshed from %r (%d chars)", path, len(text))
-    return text
+    return get_resume_text(config.resume_path)
 
 
 async def score_vacancy_llm(

@@ -44,6 +44,7 @@ from core.db import get_conn
 from core.events import emit
 from core.llm.prompts.cover_letter_v1 import PROMPT_VERSION as CL_PROMPT_VERSION
 from core.llm.prompts.scoring_v1 import PROMPT_VERSION
+from core.llm.resume import get_resume_text
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,7 @@ async def scoring_worker(bot: Bot) -> None:
                                     profile=profile,
                                     score_reasons=reasons_text,
                                     correlation_id=correlation_id,
+                                    resume_text=get_resume_text(config.resume_path),
                                 )
 
                             with get_conn() as conn:
