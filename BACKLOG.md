@@ -57,10 +57,30 @@ Goal: HH + TG feed into one pipeline with scoring, policy and approvals.
 - Worker integration: AUTO_APPLY + APPROVAL_REQUIRED, non-fatal try/except
 - 40 new tests (240 total)
 
-### PR-8 Data normalization (NEXT)
+### PR-8 Playwright Auto-Apply (DONE) — MVP v1 COMPLETE 🎉
+- Migration 008: `apply_runs` table (execution log, separate from `actions` decision log); `UNIQUE(action_id, attempt)`
+- connectors/hh_browser/: client (lazy Playwright), selectors, apply_flow (6 outcomes), bootstrap
+- hh_apply skill: store (`save_apply_run`, attempt model, no-duplicate-apply guarantee via apply_runs), worker (cap, delays, batch), notifier, SKILL.md
+- Feature flag HH_APPLY_ENABLED=false; daily cap 10; random delay 10–30s; batch size 5
+- Captcha/session expired → stop batch + notify. Max 3 attempts per task (only `failed` retried).
+- /resume_apply Telegram command
+- 49 new tests (293 total). Zero LLM calls.
+
+---
+
+## Milestone M1.5 — Post-MVP Quick Wins (Iteration 2)
+
+### PR-9 Data normalization (NEXT)
 - introduce job_parsed table (role/company/geo/remote/salary/link)
 - keep raw in job_raw, parsed in job_parsed
 - heuristic or LLM-assisted extraction of structured fields from normalized raw_text
+
+### PR-10 Apply reliability improvements
+- Auto-retry with exponential backoff
+- Screenshots on error (saved locally, not committed)
+- Docker support with Playwright pre-installed
+- Random mouse movements for more realistic browsing
+- TG inline button "Капча решена" → resume batch
 
 ---
 

@@ -209,3 +209,55 @@ Prevents duplicate letters if worker restarts mid-cycle.
 The real fallback template is personal (tone, contact info, self-description).
 Committed only the `.example.txt` sibling (generic, no PII).
 Same pattern as `identity/profile.json` and `identity/hh_searches.json`.
+
+## PR-8 Decisions (Playwright Auto-Apply) (2026-02-26)
+
+### Lazy Playwright import (never at module level)
+`from playwright.async_api import async_playwright` is inside `HHBrowserClient.session()`.
+Importing `connectors.hh_browser.client` at startup does NOT require Playwright installed.
+If `HH_APPLY_ENABLED=false` (default), Playwright is never imported — no ImportError on clean env.
+
+### apply_runs — execution log separate from actions (decision log)
+`actions` is an immutable decision log: `actions.status` tracks operator approval (pending/approved/rejected/snoozed).
+`apply_runs` is an execution log: one row per browser attempt, with its own `status` (done/failed/captcha/…), `attempt` number, `apply_url`, `started_at`, `finished_at`.
+Separation rationale:
+- Multiple retry attempts each get their own row → full audit history, no data loss
+- `actions` stays clean and immutable; execution churn doesn't pollute the decision record
+- Easier to extend: multiple resumes, screenshots per attempt, multi-channel apply
+Idempotency: `UNIQUE(action_id, attempt)` + `INSERT OR IGNORE` prevents duplicate attempt rows.
+"No second apply after SUCCESS" rule: enforced by `NOT EXISTS (... status='done')` in `get_pending_apply_tasks` — the worker never picks up a task that already has a successful run.
+Queue filter also excludes terminal non-retry statuses: `already_applied`, `manual_required`, `captcha`, `session_expired` — only `failed` (up to MAX_ATTEMPTS=3) is retried.
+
+### Captcha → stop entire batch (not just skip one vacancy)
+Captcha on HH.ru typically means the IP/session is under suspicion.
+Continuing to apply after captcha detection would worsen the situation.
+Stopping the batch and notifying the operator is the safest response.
+Human resolves captcha → bot continues on next cycle.
+
+### Session expired → stop entire batch + notify (not auto-re-login)
+Auto-re-login requires storing credentials in code or on disk — security risk.
+The bootstrap script is a one-time manual operation: operator knows when to re-run it.
+Stopping the batch on session expiry is safe; operator re-bootstraps → bot continues.
+
+### Random delay between applies (not fixed)
+Fixed delay is easier to detect by anti-bot systems.
+`random.uniform(apply_delay_min, apply_delay_max)` mimics human browsing rhythm.
+Defaults: 10–30 seconds (aggressive enough to prevent bursts, slow enough not to miss daily cap).
+
+### Apply daily cap enforced BEFORE browser session opens
+Opens no browser if cap is already reached.
+Emit-first pattern: emit `apply.cap_reached` BEFORE `send_message` (same as scoring/cover-letter caps).
+Cap counts only `apply_runs.status = 'done'` + `date(finished_at) = date('now')` — not attempted, not failed.
+
+### MAX_ATTEMPTS = 3 (not infinite retry)
+Transient failures (page load timeout, flaky element) are retried up to 3 times.
+After 3 attempts the task is marked `failed` permanently — prevents infinite retry loops.
+Operator can see failed tasks and decide whether to re-enable manually.
+
+### selectors.py — single file for all DOM selectors
+HH.ru changes markup periodically. Keeping all `data-qa` selectors in one file makes updates O(1).
+Using `data-qa` attributes is more stable than CSS classes or XPath.
+
+### HH_APPLY_ENABLED=false default (safe opt-in)
+Same pattern as HH_ENABLED (PR-6). No surprise browser sessions on first deploy.
+Operator must explicitly opt in after running bootstrap.
