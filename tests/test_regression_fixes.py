@@ -274,3 +274,47 @@ class TestCmdResumeApplyIsCoroutine:
             # is_authorized=False → returns early, no bot/DB calls needed
             await cmd_resume_apply(mock_message, mock_bot)
         # No exception = can be awaited
+
+
+# ---------------------------------------------------------------------------
+# Task D: /start sends ALLOWED_TELEGRAM_IDS warning when list is empty
+# ---------------------------------------------------------------------------
+
+
+class TestCmdStartWarning:
+    @pytest.mark.asyncio
+    async def test_warns_when_allowed_telegram_ids_empty(self):
+        """/start must send an extra warning when ALLOWED_TELEGRAM_IDS is empty."""
+        from connectors.telegram_bot import cmd_start
+
+        answers = []
+        mock_message = AsyncMock()
+        mock_message.answer = AsyncMock(side_effect=lambda t, **kw: answers.append(t))
+
+        with patch("connectors.telegram_bot.is_authorized", return_value=True), \
+             patch("connectors.telegram_bot.config") as mock_cfg:
+            mock_cfg.allowed_telegram_ids = []
+            await cmd_start(mock_message)
+
+        assert len(answers) >= 2, "Must send greeting AND warning when IDs empty"
+        combined = " ".join(answers)
+        assert "ALLOWED_TELEGRAM_IDS" in combined, (
+            "Warning must mention ALLOWED_TELEGRAM_IDS"
+        )
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_allowed_telegram_ids_set(self):
+        """/start must NOT send a warning when ALLOWED_TELEGRAM_IDS is configured."""
+        from connectors.telegram_bot import cmd_start
+
+        answers = []
+        mock_message = AsyncMock()
+        mock_message.answer = AsyncMock(side_effect=lambda t, **kw: answers.append(t))
+
+        with patch("connectors.telegram_bot.is_authorized", return_value=True), \
+             patch("connectors.telegram_bot.config") as mock_cfg:
+            mock_cfg.allowed_telegram_ids = [12345]
+            await cmd_start(mock_message)
+
+        assert len(answers) == 1, "Should send exactly one greeting, no warning"
+        assert "ALLOWED_TELEGRAM_IDS" not in answers[0]

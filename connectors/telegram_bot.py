@@ -31,6 +31,11 @@ async def cmd_start(message: Message) -> None:
     await message.answer(
         "Привет! Перешли мне пост с вакансией, и я её сохраню."
     )
+    if not config.allowed_telegram_ids:
+        await message.answer(
+            "⚠️ ALLOWED_TELEGRAM_IDS не задан — бот доступен всем.\n"
+            "В продакшене установите список разрешённых ID в .env."
+        )
 
 
 @dp.message(F.forward_origin)
