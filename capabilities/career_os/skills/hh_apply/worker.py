@@ -5,7 +5,8 @@ via Playwright, persists results in apply_runs, emits events, sends TG notificat
 
 Design rules:
 - Feature flag: exits immediately if HH_APPLY_ENABLED=false
-- Zero LLM calls — pure browser automation
+- COVER_LETTER_MODE=always (default): a cover letter is generated JIT if none exists in DB
+- COVER_LETTER_MODE=never: skips cover letter for all applies
 - All browser operations in try/except — failure does NOT crash the bot
 - Daily cap enforced before each cycle
 - Random delay between applies (anti-ban)
@@ -39,11 +40,21 @@ from capabilities.career_os.skills.hh_apply.notifier import (
     notify_manual_required,
     notify_session_expired,
 )
+from capabilities.career_os.models import Profile
+from capabilities.career_os.skills.cover_letter.generator import (
+    generate_cover_letter,
+    get_fallback_letter,
+)
+from capabilities.career_os.skills.cover_letter.store import (
+    get_today_cover_letter_count,
+    save_cover_letter,
+)
 from connectors.hh_browser.apply_flow import ApplyStatus, apply_to_vacancy
 from connectors.hh_browser.client import HHBrowserClient
 from core.config import config
 from core.db import get_conn
 from core.events import emit
+from core.llm.prompts.cover_letter_v1 import PROMPT_VERSION as _CL_PROMPT_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +65,79 @@ _CYCLE_INTERVAL = 300
 def _now_utc() -> str:
     """Return current UTC datetime as ISO string for DB storage."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def _ensure_cover_letter(
+    action_id: int,
+    job_raw_id: int,
+    vacancy_text: str,
+    correlation_id: str,
+) -> str:
+    """Return a cover letter string for the given action, generating JIT if needed.
+
+    Logic:
+    1. If vacancy_text is empty → can't generate; return "" and log warning.
+    2. Check daily cap. If cap reached → use static fallback letter (still better than "").
+    3. Otherwise generate via LLM, save to cover_letters, return the text.
+    4. Any exception → log and return "" so the apply can still proceed.
+    """
+    if not vacancy_text:
+        logger.warning(
+            "jit_cover_letter: no vacancy_text action_id=%d job_raw_id=%d"
+            " — applying without letter",
+            action_id, job_raw_id,
+        )
+        return ""
+
+    # Daily cap check
+    cap = config.cover_letter_daily_cap
+    if cap > 0:
+        with get_conn() as conn:
+            cl_count = get_today_cover_letter_count(conn)
+        if cl_count >= cap:
+            fallback = get_fallback_letter()
+            logger.warning(
+                "jit_cover_letter: daily cap reached (%d/%d) action_id=%d"
+                " — using static fallback (len=%d)",
+                cl_count, cap, action_id, len(fallback),
+            )
+            return fallback
+
+    try:
+        profile = Profile.from_file(config.profile_path)
+        letter_text, is_fb, in_tok, out_tok, cost = await generate_cover_letter(
+            vacancy_text=vacancy_text,
+            vacancy_id=job_raw_id,
+            profile=profile,
+            score_reasons="",   # no scoring context in apply worker
+            correlation_id=correlation_id,
+        )
+        with get_conn() as conn:
+            save_cover_letter(
+                conn,
+                job_raw_id=job_raw_id,
+                action_id=action_id,
+                letter_text=letter_text,
+                model="fallback" if is_fb else "claude-haiku-4-5-20251001",
+                prompt_version=_CL_PROMPT_VERSION,
+                is_fallback=is_fb,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                cost_usd=cost,
+            )
+            conn.commit()
+        logger.info(
+            "jit_cover_letter: generated action_id=%d job_raw_id=%d"
+            " is_fallback=%s len=%d",
+            action_id, job_raw_id, is_fb, len(letter_text),
+        )
+        return letter_text
+    except Exception:
+        logger.exception(
+            "jit_cover_letter: generation failed action_id=%d — applying without letter",
+            action_id,
+        )
+        return ""
 
 
 async def hh_apply_worker(bot: Bot) -> None:
@@ -152,8 +236,24 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 action_id = task["action_id"]
                 job_raw_id = task["job_raw_id"]
                 hh_vacancy_id = task["hh_vacancy_id"]
-                cover_letter = task.get("cover_letter") or ""
+                raw_letter = task.get("cover_letter")
+                cover_letter = raw_letter or ""
                 correlation_id = task.get("correlation_id") or str(uuid4())
+
+                # --- JIT cover letter (COVER_LETTER_MODE=always, default) ---
+                if not cover_letter and config.cover_letter_mode != "never":
+                    cover_letter = await _ensure_cover_letter(
+                        action_id=action_id,
+                        job_raw_id=job_raw_id,
+                        vacancy_text=task.get("vacancy_text") or "",
+                        correlation_id=correlation_id,
+                    )
+                elif not cover_letter:
+                    logger.info(
+                        "cover_letter: skipped (COVER_LETTER_MODE=never)"
+                        " action_id=%d job_raw_id=%d",
+                        action_id, job_raw_id,
+                    )
                 # Next attempt number = existing runs + 1
                 next_attempt = task["attempt_count"] + 1
 
@@ -169,7 +269,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 except Exception as exc:
                     logger.exception("Browser page failed for vacancy %d", job_raw_id)
                     with get_conn() as conn:
-                        save_apply_run(
+                        exc_rowid = save_apply_run(
                             conn,
                             action_id=action_id,
                             attempt=next_attempt,
@@ -179,12 +279,20 @@ async def _run_apply_cycle(bot: Bot) -> None:
                             finished_at=finished_at,
                         )
                         conn.commit()
+                    if not exc_rowid:
+                        # INSERT OR IGNORE hit — concurrent cycle already saved this attempt.
+                        logger.info(
+                            "apply_run duplicate (concurrent cycle) action_id=%d attempt=%d"
+                            " — skipping",
+                            action_id, next_attempt,
+                        )
+                        continue
                     failed_count += 1
                     continue
 
                 # --- Persist apply_run (one row per attempt) ---
                 with get_conn() as conn:
-                    save_apply_run(
+                    run_rowid = save_apply_run(
                         conn,
                         action_id=action_id,
                         attempt=next_attempt,
@@ -201,6 +309,16 @@ async def _run_apply_cycle(bot: Bot) -> None:
                         chat_available=result.chat_available,
                     )
                     conn.commit()
+
+                # INSERT OR IGNORE hit — concurrent cycle already saved this attempt.
+                # Skip emit + notification to avoid duplicates.
+                if not run_rowid:
+                    logger.info(
+                        "apply_run duplicate (concurrent cycle) action_id=%d attempt=%d"
+                        " status=%s — skipping emit+notify",
+                        action_id, next_attempt, result.status.value,
+                    )
+                    continue
 
                 # --- Emit event ---
                 event_name = f"apply.{result.status.value}"
@@ -223,6 +341,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
                         await notify_apply_done(
                             bot, chat_id, job_raw_id, result.apply_url,
                             letter_status=result.letter_status,
+                            action_id=action_id,
                         )
 
                 elif result.status == ApplyStatus.ALREADY_APPLIED:
@@ -232,7 +351,10 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 elif result.status == ApplyStatus.MANUAL_REQUIRED:
                     manual_count += 1
                     if chat_id:
-                        await notify_manual_required(bot, chat_id, job_raw_id, result.apply_url)
+                        await notify_manual_required(
+                            bot, chat_id, job_raw_id, result.apply_url,
+                            action_id=action_id,
+                        )
 
                 elif result.status == ApplyStatus.CAPTCHA:
                     # Stop entire batch — captcha requires human action

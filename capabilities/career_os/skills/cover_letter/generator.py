@@ -43,6 +43,37 @@ _SHORTEN_SYSTEM = (
     "Keep the structure and bullet points. Output the letter text ONLY."
 )
 
+# Negative / rejection phrases that must never appear in a cover letter.
+# If any match, the letter is replaced with the static fallback.
+_NEGATIVE_PATTERNS = (
+    "не соответствует",
+    "не подходит",
+    "не подхожу",
+    "не интересна",
+    "не интересует",
+    "не вижу себя",
+    "не считаю себя",
+    "к сожалению",
+    "однако я должна сказать",
+    "однако должна сказать",
+    "эта позиция не",
+    "данная позиция не",
+    "вакансия не",
+    "не вполне",
+    "not a good fit",
+    "not the right fit",
+    "does not match",
+    "do not match",
+    "not aligned",
+    "unfortunately",
+)
+
+
+def _has_negative_phrases(text: str) -> bool:
+    """Return True if the letter contains any forbidden negative phrases."""
+    lower = text.lower()
+    return any(pattern in lower for pattern in _NEGATIVE_PATTERNS)
+
 
 def _safe_load_resume() -> str:
     """Load resume via shared cache; swallow all exceptions (returns '' on failure)."""
@@ -145,6 +176,15 @@ async def generate_cover_letter(
             logger.warning(
                 "Cover letter response too short (%d chars) for vacancy %d — using fallback",
                 len(letter_text), vacancy_id,
+            )
+            return get_fallback_letter(), True, input_tokens, output_tokens, 0.0
+
+        # Negative phrase guardrail — letter must always be positive and enthusiastic.
+        if _has_negative_phrases(letter_text):
+            logger.warning(
+                "Cover letter contains negative/rejection phrases for vacancy %d"
+                " — using fallback. Snippet: %.80r",
+                vacancy_id, letter_text[:80],
             )
             return get_fallback_letter(), True, input_tokens, output_tokens, 0.0
 

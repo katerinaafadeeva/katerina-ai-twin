@@ -47,8 +47,32 @@ logger = logging.getLogger(__name__)
 _OUTCOME_TIMEOUT_MS = 30_000
 # Shorter timeout for optional/quick checks (ms)
 _QUICK_TIMEOUT_MS = 3_000
+# Timeout for post-submit validation (popup path must confirm success) (ms)
+_POST_SUBMIT_TIMEOUT_MS = 15_000
+# Timeout to confirm a success toast with a stronger signal (ms)
+_TOAST_CONFIRM_TIMEOUT_MS = 10_000
 # Directory for failure artifacts (screenshot + HTML snapshot)
 _ARTIFACT_DIR = "/tmp/hh_apply_artifacts"
+
+# Signals confirming that popup submit was accepted by HH.
+# Any of these on the page means the application went through.
+_POST_SUBMIT_SIGNALS = ", ".join([
+    selectors.ALREADY_APPLIED,      # vacancy page flipped to already-applied
+    selectors.RESPONSE_TOPIC_LINK,  # chat link appeared (quick-apply succeeded)
+    selectors.SUCCESS_TOAST,        # "Отклик отправлен" toast
+    selectors.RESPONSE_SENT_LABEL,  # response-sent label
+    selectors.INLINE_LETTER_FORM,   # inline letter form (path B variant after popup)
+    selectors.CAPTCHA_WRAPPER,      # captcha — will be caught in subsequent check
+])
+
+# Strong confirmation signals that truly prove apply was recorded on HH's side.
+# Used as secondary check after weak signals like SUCCESS_TOAST.
+# SUCCESS_TOAST is generic (bloko-notification) and can appear for non-apply events.
+_POST_APPLY_CONFIRM_SIGNALS = ", ".join([
+    selectors.ALREADY_APPLIED,      # vacancy page shows already-applied state
+    selectors.RESPONSE_TOPIC_LINK,  # chat link — only appears after confirmed apply
+    selectors.RESPONSE_SENT_LABEL,  # "Отклик отправлен" label on vacancy page
+])
 
 # Combined CSS selector waited for after clicking apply.
 # First match determines which path HH used.
@@ -150,7 +174,7 @@ async def _accept_cookies(page) -> None:
 
 
 async def _diagnose_timeout(page) -> tuple:
-    """Parse page HTML after timeout to infer the actual outcome.
+    """Parse page HTML and URL after timeout to infer the actual outcome.
 
     Returns:
         (detected_outcome: str, page_title: str)
@@ -160,6 +184,12 @@ async def _diagnose_timeout(page) -> tuple:
         title = await page.title()
     except Exception:
         return _DIAGNOSTIC_UNKNOWN, ""
+
+    # Read current URL (non-awaitable property; may be MagicMock in tests — guard with str())
+    try:
+        current_url = str(page.url)
+    except Exception:
+        current_url = ""
 
     # Chat link + inline form: quick apply succeeded, form appeared but we missed it
     if selectors.RESPONSE_TOPIC_LINK.split("'")[1] in html:
@@ -177,8 +207,15 @@ async def _diagnose_timeout(page) -> tuple:
     if "перейти на сайт работодателя" in html_lower or "vacancy-response-link-view-employer" in html:
         return _DIAGNOSTIC_EXTERNAL, title
 
-    # Questionnaire / test required
-    if "questionnaire" in html_lower:
+    # Questionnaire / test required.
+    # HH redirects to /quest/ URLs and shows Russian text — check both.
+    # Use stem "анкет" to match all declensions: анкета/анкету/анкеты/анкете.
+    if (
+        "/quest" in current_url
+        or "questionnaire" in html_lower
+        or "анкет" in html_lower
+        or "ответьте на вопросы" in html_lower
+    ):
         return _DIAGNOSTIC_QUESTIONNAIRE, title
 
     # Phone verification
@@ -651,12 +688,38 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         except Exception:
             pass
 
-        # Success toast (fast success path — no form immediately visible)
+        # Success toast (weak signal — needs secondary confirmation)
+        # bloko-notification is a generic HH component that fires for many events,
+        # not just apply success. Wait for a strong signal before marking DONE.
         try:
             toast = await page.query_selector(selectors.SUCCESS_TOAST)
             if toast and await toast.is_visible():
-                logger.info("Success toast detected on %s (quick apply)", vacancy_url)
+                logger.info(
+                    "Success toast detected on %s — waiting for strong confirmation",
+                    vacancy_url,
+                )
                 flow_type = "quick_apply"
+                try:
+                    await page.wait_for_selector(
+                        _POST_APPLY_CONFIRM_SIGNALS, timeout=_TOAST_CONFIRM_TIMEOUT_MS
+                    )
+                except Exception:
+                    # Toast appeared but no strong apply signal found — likely false positive
+                    artifact_suffix = await _save_fail_artifacts(page, vacancy_url)
+                    logger.warning(
+                        "Toast appeared but no strong confirmation on %s "
+                        "(toast_unconfirmed)%s",
+                        vacancy_url,
+                        artifact_suffix,
+                    )
+                    return ApplyResult(
+                        status=ApplyStatus.FAILED,
+                        error=f"toast_unconfirmed{artifact_suffix}",
+                        flow_type=flow_type,
+                        detected_outcome="toast_unconfirmed",
+                        apply_url=apply_url,
+                    )
+                logger.info("Toast confirmed by strong signal on %s", vacancy_url)
                 if cover_letter:
                     # Run full attach chain — inline form may appear shortly after toast
                     ls, tf, ca, fu = await _attach_cover_letter(page, cover_letter, vacancy_url)
@@ -767,6 +830,27 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         await submit_btn.click()
         logger.info("Application submitted via popup for %s", vacancy_url)
 
+        # Post-submit validation: wait for a recognizable outcome before marking DONE.
+        # Without this, a failed submit would silently return DONE.
+        try:
+            await page.wait_for_selector(
+                _POST_SUBMIT_SIGNALS, timeout=_POST_SUBMIT_TIMEOUT_MS
+            )
+        except Exception:
+            artifact_suffix = await _save_fail_artifacts(page, vacancy_url)
+            logger.warning(
+                "Popup submit timeout — no success signal on %s%s",
+                vacancy_url,
+                artifact_suffix,
+            )
+            return ApplyResult(
+                status=ApplyStatus.FAILED,
+                error=f"popup_submit_timeout{artifact_suffix}",
+                flow_type=flow_type,
+                detected_outcome="popup_submit_timeout",
+                apply_url=apply_url,
+            )
+
         # Final captcha check (some vacancies show captcha after submit)
         if await _is_captcha_present(page):
             logger.warning("Captcha after submit on %s", vacancy_url)
@@ -780,6 +864,7 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 flow_type=flow_type,
                 textarea_found=True,
                 detected_outcome="popup_submit",
+                final_url=page.url,
                 apply_url=apply_url,
                 letter_len=len(cover_letter),
             )

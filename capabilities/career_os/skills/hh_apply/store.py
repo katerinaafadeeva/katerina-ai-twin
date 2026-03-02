@@ -60,11 +60,16 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
             a.job_raw_id,
             a.correlation_id,
             jr.hh_vacancy_id,
-            cl.letter_text  AS cover_letter,
+            jr.raw_text     AS vacancy_text,
+            COALESCE(
+                (SELECT cl1.letter_text FROM cover_letters cl1
+                 WHERE cl1.action_id = a.id LIMIT 1),
+                (SELECT cl2.letter_text FROM cover_letters cl2
+                 WHERE cl2.job_raw_id = jr.id ORDER BY cl2.id DESC LIMIT 1)
+            ) AS cover_letter,
             COALESCE(r.attempt_count, 0) AS attempt_count
         FROM actions a
         JOIN job_raw jr ON jr.id = a.job_raw_id
-        LEFT JOIN cover_letters cl ON cl.action_id = a.id
         LEFT JOIN (
             SELECT action_id, COUNT(*) AS attempt_count
             FROM apply_runs

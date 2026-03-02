@@ -83,6 +83,7 @@ class TestGetPendingApplyTasks:
         assert len(tasks) == 1
         assert tasks[0]["hh_vacancy_id"] == "111"
         assert tasks[0]["attempt_count"] == 0
+        assert "vacancy_text" in tasks[0]  # raw_text exposed for JIT letter generation
 
     def test_excludes_approval_required(self, db_conn):
         job_id = _insert_job(db_conn, "222")
@@ -163,6 +164,57 @@ class TestGetPendingApplyTasks:
         _insert_run(db_conn, action_id, attempt=1, status="manual_required")
         db_conn.commit()
         assert get_pending_apply_tasks(db_conn) == []
+
+    def test_cover_letter_fallback_by_job_raw_id(self, db_conn):
+        """New AUTO_APPLY action inherits cover letter from previous action for same job.
+
+        Scenario (mirrors Bug 1 from production):
+          - job_raw_id=X, old action_id=OLD has cover letter
+          - new action_id=NEW for same job has no cover letter row
+          - get_pending_apply_tasks must return the letter via job_raw_id fallback
+        """
+        job_id = _insert_job(db_conn, "fallback_test")
+        # Old action that already has a cover letter (e.g. from APPROVAL_REQUIRED scoring)
+        old_action_id = _insert_action(db_conn, job_id, status="rejected")
+        db_conn.execute(
+            "INSERT INTO cover_letters (job_raw_id, action_id, letter_text, model, prompt_version)"
+            " VALUES (?, ?, 'Inherited letter', 'haiku', 'v1')",
+            (job_id, old_action_id),
+        )
+        db_conn.commit()
+        # New pending AUTO_APPLY action — no cover_letter row of its own
+        _insert_action(db_conn, job_id, action_type="AUTO_APPLY", status="pending")
+        db_conn.commit()
+
+        tasks = get_pending_apply_tasks(db_conn)
+        assert len(tasks) == 1
+        assert tasks[0]["cover_letter"] == "Inherited letter"
+
+    def test_cover_letter_action_id_takes_priority(self, db_conn):
+        """Direct action_id match wins over job_raw_id fallback."""
+        job_id = _insert_job(db_conn, "priority_test")
+        action_id = _insert_action(db_conn, job_id)
+        # Cover letter for a different old action (job_raw_id match only)
+        old_action_id = db_conn.execute(
+            "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, 'AUTO_APPLY', 'rejected')",
+            (job_id,),
+        ).lastrowid
+        db_conn.execute(
+            "INSERT INTO cover_letters (job_raw_id, action_id, letter_text, model, prompt_version)"
+            " VALUES (?, ?, 'Old letter', 'haiku', 'v1')",
+            (job_id, old_action_id),
+        )
+        # Cover letter directly for current action (should win)
+        db_conn.execute(
+            "INSERT INTO cover_letters (job_raw_id, action_id, letter_text, model, prompt_version)"
+            " VALUES (?, ?, 'Direct letter', 'haiku', 'v1')",
+            (job_id, action_id),
+        )
+        db_conn.commit()
+
+        tasks = get_pending_apply_tasks(db_conn)
+        assert len(tasks) == 1
+        assert tasks[0]["cover_letter"] == "Direct letter"
 
 
 # ---------------------------------------------------------------------------

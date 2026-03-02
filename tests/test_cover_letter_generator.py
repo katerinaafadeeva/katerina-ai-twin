@@ -339,3 +339,112 @@ class TestGenerateCoverLetter:
 
         assert captured_messages
         assert "Опыт 7 лет" in captured_messages[0]
+
+
+# ---------------------------------------------------------------------------
+# Negative phrase guardrail
+# ---------------------------------------------------------------------------
+
+
+class TestNegativePhraseGuardrail:
+    def setup_method(self):
+        import capabilities.career_os.skills.cover_letter.generator as gen
+        import core.llm.resume as resume_mod
+        gen._fallback_cache = ""
+        resume_mod._cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_negative_phrase_triggers_fallback(self):
+        """Letter containing 'не соответствует' is replaced by fallback."""
+        import capabilities.career_os.skills.cover_letter.generator as gen
+        gen._fallback_cache = "Позитивное запасное письмо для теста."
+
+        bad_letter = (
+            "Здравствуйте! Эта позиция не соответствует моим карьерным целям, "
+            "однако я всё же решила откликнуться."
+        )
+        mock_response = _mock_anthropic_response(bad_letter)
+
+        with patch("capabilities.career_os.skills.cover_letter.generator.anthropic.AsyncAnthropic") as MockClient:
+            mock_instance = AsyncMock()
+            MockClient.return_value = mock_instance
+            mock_instance.messages.create = AsyncMock(return_value=mock_response)
+
+            with patch("capabilities.career_os.skills.cover_letter.generator.emit"):
+                result = await gen.generate_cover_letter(
+                    vacancy_text="Вакансия Product Manager",
+                    vacancy_id=10,
+                    profile=_make_profile(),
+                    score_reasons="",
+                    correlation_id="test-neg-1",
+                )
+
+        text, is_fb, _, _, _ = result
+        assert is_fb is True
+        assert text == "Позитивное запасное письмо для теста."
+
+    @pytest.mark.asyncio
+    async def test_other_negative_patterns_trigger_fallback(self):
+        """Various forbidden phrases each trigger fallback."""
+        import capabilities.career_os.skills.cover_letter.generator as gen
+        gen._fallback_cache = "Запасное."
+
+        patterns = [
+            "к сожалению, данная вакансия мне не подходит",
+            "не вижу себя на этой позиции",
+            "unfortunately I am not a good fit",
+            "this does not match my experience",
+        ]
+
+        for bad_phrase in patterns:
+            mock_response = _mock_anthropic_response(bad_phrase + " " * 50)
+            with patch("capabilities.career_os.skills.cover_letter.generator.anthropic.AsyncAnthropic") as MockClient:
+                mock_instance = AsyncMock()
+                MockClient.return_value = mock_instance
+                mock_instance.messages.create = AsyncMock(return_value=mock_response)
+
+                with patch("capabilities.career_os.skills.cover_letter.generator.emit"):
+                    result = await gen.generate_cover_letter(
+                        vacancy_text="Test vacancy",
+                        vacancy_id=11,
+                        profile=_make_profile(),
+                        score_reasons="",
+                        correlation_id="test-neg-2",
+                    )
+
+            _, is_fb, _, _, _ = result
+            assert is_fb is True, f"Expected fallback for phrase: {bad_phrase!r}"
+
+    @pytest.mark.asyncio
+    async def test_positive_letter_passes_guardrail(self):
+        """A clean positive letter is NOT replaced by fallback."""
+        import capabilities.career_os.skills.cover_letter.generator as gen
+        gen._fallback_cache = "Запасное."
+
+        good_letter = (
+            "Здравствуйте!\n"
+            "Прошу рассмотреть моё резюме на позицию Product Manager.\n"
+            "Считаю, что буду полезна, т.к.:\n"
+            "— опыт управления продуктом 5+ лет\n"
+            "— работа с данными и A/B тестами\n"
+            "Ваша компания интересна фокусом на рост пользователей."
+        )
+        mock_response = _mock_anthropic_response(good_letter)
+
+        with patch("capabilities.career_os.skills.cover_letter.generator.anthropic.AsyncAnthropic") as MockClient:
+            mock_instance = AsyncMock()
+            MockClient.return_value = mock_instance
+            mock_instance.messages.create = AsyncMock(return_value=mock_response)
+
+            with patch("capabilities.career_os.skills.cover_letter.generator.emit"):
+                result = await gen.generate_cover_letter(
+                    vacancy_text="Product Manager vacancy",
+                    vacancy_id=12,
+                    profile=_make_profile(),
+                    score_reasons="",
+                    correlation_id="test-neg-3",
+                )
+
+        text, is_fb, _, _, _ = result
+        assert is_fb is False
+        assert text == good_letter

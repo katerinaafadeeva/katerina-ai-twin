@@ -22,6 +22,7 @@ async def notify_apply_done(
     job_raw_id: int,
     apply_url: str,
     letter_status: Optional[str] = None,
+    action_id: Optional[int] = None,
 ) -> None:
     """Notify operator that an application was submitted.
 
@@ -30,17 +31,21 @@ async def notify_apply_done(
       sent_chat                    → ✅ Отклик + 💬 письмо в чате
       no_field_found/closed/failed → ⚠️ Отклик без письма (reason)
       not_requested / None         → ✅ Отклик отправлен
+
+    action_id is included in the message so the operator can correlate
+    notifications from multi-vacancy batches with DB records.
     """
     try:
+        tag = f" [action={action_id}]" if action_id is not None else ""
         if letter_status in _LETTER_SENT:
-            text = f"✅ Отклик + 📝 письмо: #{job_raw_id}\n{apply_url}"
+            text = f"✅ Отклик + 📝 письмо: #{job_raw_id}{tag}\n{apply_url}"
         elif letter_status == _LETTER_SENT_CHAT:
-            text = f"✅ Отклик + 💬 письмо в чате: #{job_raw_id}\n{apply_url}"
+            text = f"✅ Отклик + 💬 письмо в чате: #{job_raw_id}{tag}\n{apply_url}"
         elif letter_status in _LETTER_NOT_SENT:
-            text = f"⚠️ Отклик без письма ({letter_status}): #{job_raw_id}\n{apply_url}"
+            text = f"⚠️ Отклик без письма ({letter_status}): #{job_raw_id}{tag}\n{apply_url}"
         else:
             # not_requested or legacy None
-            text = f"✅ Отклик отправлен: #{job_raw_id}\n{apply_url}"
+            text = f"✅ Отклик отправлен: #{job_raw_id}{tag}\n{apply_url}"
         await bot.send_message(chat_id, text)
     except Exception:
         logger.exception("Failed to send apply_done notification for job %d", job_raw_id)
@@ -51,12 +56,14 @@ async def notify_manual_required(
     chat_id: int,
     job_raw_id: int,
     apply_url: str,
+    action_id: Optional[int] = None,
 ) -> None:
     """Notify operator that manual action is required (apply button not found)."""
     try:
+        tag = f" [action={action_id}]" if action_id is not None else ""
         await bot.send_message(
             chat_id,
-            f"⚠️ Требуется ручное действие: вакансия #{job_raw_id}\n"
+            f"⚠️ Требуется ручное действие: вакансия #{job_raw_id}{tag}\n"
             f"Кнопка отклика не найдена. Откликнитесь вручную:\n{apply_url}",
         )
     except Exception:

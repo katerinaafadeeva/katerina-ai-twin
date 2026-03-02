@@ -31,6 +31,8 @@ from connectors.hh_browser.apply_flow import (
     _attach_cover_letter,
     _send_letter_via_chat,
     _POST_CLICK_OUTCOMES,
+    _POST_SUBMIT_SIGNALS,
+    _POST_APPLY_CONFIRM_SIGNALS,
     _DIAGNOSTIC_INLINE,
     _DIAGNOSTIC_CHAT,
     _DIAGNOSTIC_EXTERNAL,
@@ -208,10 +210,41 @@ class TestDiagnoseTimeout:
         assert outcome == _DIAGNOSTIC_EXTERNAL
 
     @pytest.mark.asyncio
-    async def test_detects_questionnaire(self):
+    async def test_detects_questionnaire_english(self):
         page = AsyncMock()
         page.content = AsyncMock(return_value="<html>questionnaire</html>")
         page.title = AsyncMock(return_value="")
+        page.url = "https://hh.ru/vacancy/111"
+        outcome, _ = await _diagnose_timeout(page)
+        assert outcome == _DIAGNOSTIC_QUESTIONNAIRE
+
+    @pytest.mark.asyncio
+    async def test_detects_questionnaire_russian_anketa(self):
+        """HH.ru shows Russian 'анкету' (any declension) — must be detected as questionnaire_required."""
+        page = AsyncMock()
+        page.content = AsyncMock(return_value="<html><h1>Заполните анкету работодателя</h1></html>")
+        page.title = AsyncMock(return_value="Анкета")
+        page.url = "https://hh.ru/vacancy/111"
+        outcome, _ = await _diagnose_timeout(page)
+        assert outcome == _DIAGNOSTIC_QUESTIONNAIRE
+
+    @pytest.mark.asyncio
+    async def test_detects_questionnaire_russian_questions(self):
+        """'Ответьте на вопросы' phrase must be detected as questionnaire_required."""
+        page = AsyncMock()
+        page.content = AsyncMock(return_value="<html>Ответьте на вопросы работодателя</html>")
+        page.title = AsyncMock(return_value="")
+        page.url = "https://hh.ru/vacancy/111"
+        outcome, _ = await _diagnose_timeout(page)
+        assert outcome == _DIAGNOSTIC_QUESTIONNAIRE
+
+    @pytest.mark.asyncio
+    async def test_detects_questionnaire_via_url(self):
+        """HH redirects to /quest/ URL — detected via page.url even if HTML unclear."""
+        page = AsyncMock()
+        page.content = AsyncMock(return_value="<html><p>Загрузка...</p></html>")
+        page.title = AsyncMock(return_value="")
+        page.url = "https://hh.ru/applicant/vacancy/quest/12345"
         outcome, _ = await _diagnose_timeout(page)
         assert outcome == _DIAGNOSTIC_QUESTIONNAIRE
 
@@ -497,6 +530,10 @@ def _make_page(
     chat_send=True,
     # Cookies
     cookies_visible=False,
+    # Popup submit validation
+    submit_timeout=False,  # True → post-submit wait_for_selector raises (simulate timeout)
+    # Success toast secondary confirmation
+    toast_confirmed=True,  # True → _POST_APPLY_CONFIRM_SIGNALS resolves; False → raises
 ):
     """Build a mock Playwright page for the multi-outcome apply flow.
 
@@ -609,6 +646,14 @@ def _make_page(
             if outcome_timeout:
                 raise Exception("Timeout 30s")
             return AsyncMock()
+        if selector == _POST_SUBMIT_SIGNALS:
+            if submit_timeout:
+                raise Exception("Timeout — no post-submit success signal")
+            return AsyncMock()
+        if selector == _POST_APPLY_CONFIRM_SIGNALS:
+            if not toast_confirmed:
+                raise Exception("Timeout — no strong apply confirmation")
+            return AsyncMock()
         if selector == sel.INLINE_LETTER_FORM:
             return inline_form_el if (inline_form and state["clicked"]) else (_ for _ in ()).throw(Exception("timeout"))
         if selector == sel.CHAT_MESSAGE_INPUT:
@@ -719,30 +764,46 @@ class TestApplyToVacancy:
         assert result.letter_status == _LS_SENT_CHAT
         assert result.chat_available is True
 
-    # --- Success toast (was returning DONE_WITHOUT_LETTER before fix) ---
+    # --- Success toast — now requires strong post-apply confirmation ---
 
     @pytest.mark.asyncio
-    async def test_success_toast_no_cover_letter_gives_not_requested(self):
-        page = _make_page(success_toast=True, submit_popup=False)
+    async def test_success_toast_unconfirmed_gives_failed(self):
+        """Toast appears but no strong confirmation signal → FAILED (false positive guard)."""
+        page = _make_page(success_toast=True, submit_popup=False, toast_confirmed=False)
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", "Письмо")
+        assert result.status == ApplyStatus.FAILED
+        assert "toast_unconfirmed" in result.error
+
+    @pytest.mark.asyncio
+    async def test_success_toast_unconfirmed_no_letter_also_failed(self):
+        """Toast without strong confirmation → FAILED regardless of cover_letter."""
+        page = _make_page(success_toast=True, submit_popup=False, toast_confirmed=False)
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", cover_letter="")
+        assert result.status == ApplyStatus.FAILED
+        assert "toast_unconfirmed" in result.error
+
+    @pytest.mark.asyncio
+    async def test_success_toast_confirmed_no_cover_letter_gives_not_requested(self):
+        page = _make_page(success_toast=True, submit_popup=False, toast_confirmed=True)
         result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", cover_letter="")
         assert result.status == ApplyStatus.DONE
         assert result.letter_status == _LS_NOT_REQUESTED
 
     @pytest.mark.asyncio
-    async def test_success_toast_with_letter_runs_attach_chain(self):
-        """After success toast, attach chain is called (not immediate DONE_WITHOUT_LETTER)."""
-        page = _make_page(success_toast=True, submit_popup=False)
-        # No fallback fields available → no_field_found (NOT done_without_letter)
+    async def test_success_toast_confirmed_with_letter_runs_attach_chain(self):
+        """After confirmed toast, attach chain is called."""
+        page = _make_page(success_toast=True, submit_popup=False, toast_confirmed=True)
         result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", "Письмо")
         assert result.status == ApplyStatus.DONE
         assert result.letter_status == _LS_NO_FIELD
 
     @pytest.mark.asyncio
-    async def test_success_toast_then_inline_form_appears(self):
-        """Success toast fires first, then inline form appears during attach chain."""
+    async def test_success_toast_confirmed_then_inline_form_appears(self):
+        """Confirmed toast + inline form found in attach chain → sent_inline."""
         page = _make_page(
             success_toast=True,
             submit_popup=False,
+            toast_confirmed=True,
             inline_form=True,
             inline_textarea=True,
         )
@@ -879,6 +940,28 @@ class TestApplyToVacancy:
         assert "questionnaire_required" in result.error
 
     @pytest.mark.asyncio
+    async def test_timeout_questionnaire_russian_html_gives_manual_required(self):
+        """Russian 'анкета' in HTML → MANUAL_REQUIRED, no retry."""
+        page = _make_page(outcome_timeout=True)
+        page.content = AsyncMock(
+            return_value="<html><h1>Заполните анкету работодателя</h1></html>"
+        )
+        page.title = AsyncMock(return_value="Анкета")
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/130872223")
+        assert result.status == ApplyStatus.MANUAL_REQUIRED
+        assert result.detected_outcome == "questionnaire_required"
+
+    @pytest.mark.asyncio
+    async def test_timeout_questionnaire_url_redirect_gives_manual_required(self):
+        """HH redirect to /quest/ URL → MANUAL_REQUIRED, no retry."""
+        page = _make_page(outcome_timeout=True, url="https://hh.ru/applicant/vacancy/quest/99")
+        page.content = AsyncMock(return_value="<html><p>Загрузка</p></html>")
+        page.title = AsyncMock(return_value="Анкета")
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/130872223")
+        assert result.status == ApplyStatus.MANUAL_REQUIRED
+        assert result.detected_outcome == "questionnaire_required"
+
+    @pytest.mark.asyncio
     async def test_error_format_has_detected_outcome_and_page_url(self):
         page = _make_page(outcome_timeout=True)
         page.content = AsyncMock(return_value="<html>Подтвердить телефон</html>")
@@ -904,6 +987,35 @@ class TestApplyToVacancy:
         letter = "Сопроводительное письмо"
         result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", letter)
         assert result.letter_len == len(letter)
+
+    # --- Popup submit timeout ---
+
+    @pytest.mark.asyncio
+    async def test_popup_submit_timeout_gives_failed(self):
+        """No post-submit success signal within 15s → FAILED with popup_submit_timeout."""
+        page = _make_page(textarea_found=False, submit_timeout=True)
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", "Письмо")
+        assert result.status == ApplyStatus.FAILED
+        assert "popup_submit_timeout" in result.error
+
+    @pytest.mark.asyncio
+    async def test_popup_submit_timeout_no_letter_gives_failed(self):
+        """Timeout also FAILED when no letter requested."""
+        page = _make_page(textarea_found=False, submit_timeout=True)
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111", cover_letter="")
+        assert result.status == ApplyStatus.FAILED
+        assert "popup_submit_timeout" in result.error
+
+    # --- final_url telemetry ---
+
+    @pytest.mark.asyncio
+    async def test_popup_sent_popup_captures_final_url(self):
+        """sent_popup result must carry final_url = page.url after submit."""
+        page = _make_page(textarea_found=True, url="https://hh.ru/vacancy/777")
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/777", "Письмо")
+        assert result.status == ApplyStatus.DONE
+        assert result.letter_status == _LS_SENT_POPUP
+        assert result.final_url == "https://hh.ru/vacancy/777"
 
     @pytest.mark.asyncio
     async def test_cookies_accepted_on_vacancy_page(self):

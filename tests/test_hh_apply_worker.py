@@ -30,6 +30,9 @@ def _make_config(
     apply_batch_size=5,
     hh_storage_state_path="/tmp/nonexistent.json",
     allowed_telegram_ids=None,
+    cover_letter_mode="always",
+    cover_letter_daily_cap=50,
+    profile_path="identity/profile.json",
 ):
     cfg = MagicMock()
     cfg.hh_apply_enabled = hh_apply_enabled
@@ -39,15 +42,25 @@ def _make_config(
     cfg.apply_batch_size = apply_batch_size
     cfg.hh_storage_state_path = hh_storage_state_path
     cfg.allowed_telegram_ids = allowed_telegram_ids or [12345]
+    cfg.cover_letter_mode = cover_letter_mode
+    cfg.cover_letter_daily_cap = cover_letter_daily_cap
+    cfg.profile_path = profile_path
     return cfg
 
 
-def _make_task(action_id=1, job_raw_id=10, hh_vacancy_id="111", cover_letter="Письмо"):
+def _make_task(
+    action_id=1,
+    job_raw_id=10,
+    hh_vacancy_id="111",
+    cover_letter="Письмо",
+    vacancy_text="Ищем Python-разработчика с опытом Flask и PostgreSQL.",
+):
     return {
         "action_id": action_id,
         "job_raw_id": job_raw_id,
         "hh_vacancy_id": hh_vacancy_id,
         "cover_letter": cover_letter,
+        "vacancy_text": vacancy_text,
         "correlation_id": "corr-123",
         "attempt_count": 0,  # number of existing apply_runs for this action
     }
@@ -282,3 +295,187 @@ class TestApplyCycleOutcomes:
             await _run_apply_cycle(mock_bot)
 
         MockClient.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _ensure_cover_letter — JIT generation
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureCoverLetter:
+    """Unit tests for the _ensure_cover_letter helper."""
+
+    @pytest.mark.asyncio
+    async def test_generates_and_returns_letter(self):
+        """When no letter exists, generate via LLM and return the text."""
+        mock_config = _make_config(cover_letter_daily_cap=50)
+        generated = "Сгенерированное письмо для вакансии."
+
+        with patch("capabilities.career_os.skills.hh_apply.worker.config", mock_config), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_today_cover_letter_count", return_value=0), \
+             patch("capabilities.career_os.skills.hh_apply.worker.Profile") as MockProfile, \
+             patch("capabilities.career_os.skills.hh_apply.worker.generate_cover_letter",
+                   new_callable=AsyncMock, return_value=(generated, False, 100, 50, 0.001)) as mock_gen, \
+             patch("capabilities.career_os.skills.hh_apply.worker.save_cover_letter"):
+
+            mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_gc.return_value.__exit__ = MagicMock(return_value=False)
+
+            from capabilities.career_os.skills.hh_apply.worker import _ensure_cover_letter
+            result = await _ensure_cover_letter(
+                action_id=1, job_raw_id=10,
+                vacancy_text="Ищем Python-разработчика.", correlation_id="c1"
+            )
+
+        assert result == generated
+        mock_gen.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_vacancy_text(self):
+        """Empty vacancy_text → no generation, return ''."""
+        mock_config = _make_config()
+
+        with patch("capabilities.career_os.skills.hh_apply.worker.config", mock_config):
+            from capabilities.career_os.skills.hh_apply.worker import _ensure_cover_letter
+            result = await _ensure_cover_letter(
+                action_id=1, job_raw_id=10, vacancy_text="", correlation_id="c2"
+            )
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_uses_fallback_when_daily_cap_reached(self):
+        """When daily cap is reached, return static fallback letter."""
+        mock_config = _make_config(cover_letter_daily_cap=10)
+        fallback_text = "Добрый день, ваша вакансия интересна."
+
+        with patch("capabilities.career_os.skills.hh_apply.worker.config", mock_config), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_today_cover_letter_count", return_value=10), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_fallback_letter", return_value=fallback_text), \
+             patch("capabilities.career_os.skills.hh_apply.worker.generate_cover_letter") as mock_gen:
+
+            mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_gc.return_value.__exit__ = MagicMock(return_value=False)
+
+            from capabilities.career_os.skills.hh_apply.worker import _ensure_cover_letter
+            result = await _ensure_cover_letter(
+                action_id=1, job_raw_id=10, vacancy_text="Вакансия", correlation_id="c3"
+            )
+
+        assert result == fallback_text
+        mock_gen.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_on_generation_exception(self):
+        """LLM failure → return '' so apply still proceeds."""
+        mock_config = _make_config(cover_letter_daily_cap=50)
+
+        with patch("capabilities.career_os.skills.hh_apply.worker.config", mock_config), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_today_cover_letter_count", return_value=0), \
+             patch("capabilities.career_os.skills.hh_apply.worker.Profile") as MockProfile, \
+             patch("capabilities.career_os.skills.hh_apply.worker.generate_cover_letter",
+                   new_callable=AsyncMock, side_effect=Exception("API down")):
+
+            mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_gc.return_value.__exit__ = MagicMock(return_value=False)
+
+            from capabilities.career_os.skills.hh_apply.worker import _ensure_cover_letter
+            result = await _ensure_cover_letter(
+                action_id=1, job_raw_id=10, vacancy_text="Вакансия", correlation_id="c4"
+            )
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_skips_generation_when_mode_never(self):
+        """COVER_LETTER_MODE=never → _ensure_cover_letter is never called (worker skips it)."""
+        from connectors.hh_browser.apply_flow import ApplyResult, ApplyStatus
+        apply_result = ApplyResult(
+            status=ApplyStatus.DONE, apply_url="https://hh.ru/vacancy/111"
+        )
+        mock_bot = AsyncMock()
+        mock_config = _make_config(apply_daily_cap=0, cover_letter_mode="never")
+        # Task with NO cover letter in DB
+        task = _make_task(cover_letter=None)
+
+        with patch("capabilities.career_os.skills.hh_apply.worker.config", mock_config), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_today_apply_count", return_value=0), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_pending_apply_tasks", return_value=[task]), \
+             patch("capabilities.career_os.skills.hh_apply.worker.save_apply_run"), \
+             patch("capabilities.career_os.skills.hh_apply.worker.emit"), \
+             patch("capabilities.career_os.skills.hh_apply.worker.apply_to_vacancy",
+                   new_callable=AsyncMock, return_value=apply_result) as mock_apply, \
+             patch("capabilities.career_os.skills.hh_apply.worker.HHBrowserClient") as MockClient, \
+             patch("capabilities.career_os.skills.hh_apply.worker.notify_apply_done"), \
+             patch("capabilities.career_os.skills.hh_apply.worker.notify_batch_summary"), \
+             patch("capabilities.career_os.skills.hh_apply.worker.generate_cover_letter") as mock_gen:
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.new_page = AsyncMock(return_value=AsyncMock())
+            MockClient.return_value.session.return_value = mock_ctx
+            mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_gc.return_value.__exit__ = MagicMock(return_value=False)
+
+            from capabilities.career_os.skills.hh_apply.worker import _run_apply_cycle
+            await _run_apply_cycle(mock_bot)
+
+        # LLM was NOT called — mode=never bypasses JIT
+        mock_gen.assert_not_called()
+        # apply_to_vacancy called with empty cover_letter
+        call_args = mock_apply.call_args
+        assert call_args[0][2] == ""  # cover_letter arg is ""
+
+
+# ---------------------------------------------------------------------------
+# _run_apply_cycle — duplicate apply_run (concurrent cycle safety)
+# ---------------------------------------------------------------------------
+
+
+class TestApplyCycleDuplicateRun:
+    @pytest.mark.asyncio
+    async def test_duplicate_apply_run_skips_notification(self):
+        """When save_apply_run returns 0 (INSERT OR IGNORE hit by concurrent cycle),
+        no Telegram notification is sent for that action.
+        """
+        from connectors.hh_browser.apply_flow import ApplyResult, ApplyStatus
+
+        apply_result = ApplyResult(status=ApplyStatus.DONE, apply_url="https://hh.ru/vacancy/111")
+        mock_bot = AsyncMock()
+        mock_config = _make_config(apply_daily_cap=0)
+        task = _make_task()
+
+        with patch("capabilities.career_os.skills.hh_apply.worker.config", mock_config), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_today_apply_count", return_value=0), \
+             patch("capabilities.career_os.skills.hh_apply.worker.get_pending_apply_tasks", return_value=[task]), \
+             patch("capabilities.career_os.skills.hh_apply.worker.save_apply_run", return_value=0) as mock_save, \
+             patch("capabilities.career_os.skills.hh_apply.worker.emit") as mock_emit, \
+             patch("capabilities.career_os.skills.hh_apply.worker.apply_to_vacancy",
+                   new_callable=AsyncMock, return_value=apply_result), \
+             patch("capabilities.career_os.skills.hh_apply.worker.HHBrowserClient") as MockClient, \
+             patch("capabilities.career_os.skills.hh_apply.worker.notify_apply_done") as mock_notify, \
+             patch("capabilities.career_os.skills.hh_apply.worker.notify_batch_summary"):
+
+            mock_ctx = AsyncMock()
+            mock_ctx.__aenter__ = AsyncMock(return_value=mock_ctx)
+            mock_ctx.__aexit__ = AsyncMock(return_value=False)
+            mock_ctx.new_page = AsyncMock(return_value=AsyncMock())
+            MockClient.return_value.session.return_value = mock_ctx
+
+            mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
+            mock_gc.return_value.__exit__ = MagicMock(return_value=False)
+
+            from capabilities.career_os.skills.hh_apply.worker import _run_apply_cycle
+            await _run_apply_cycle(mock_bot)
+
+        # save_apply_run was called (attempt was made) but returned 0 (duplicate)
+        mock_save.assert_called_once()
+        # Neither emit nor notify should fire — concurrent cycle already handled it
+        mock_emit.assert_not_called()
+        mock_notify.assert_not_called()

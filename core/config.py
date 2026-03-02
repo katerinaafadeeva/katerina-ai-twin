@@ -23,6 +23,7 @@ class Config:
     # Cover letter generation
     cover_letter_daily_cap: int      # max LLM cover letter calls per day (0 = no cap)
     cover_letter_fallback_path: str  # path to fallback template file
+    cover_letter_mode: str           # "always" (default) | "never" — controls JIT generation for AUTO_APPLY
 
     # Resume for LLM scoring context
     resume_path: str                 # path to resume.md (plain text, used in scoring prompt)
@@ -62,6 +63,7 @@ class Config:
             cover_letter_fallback_path=os.getenv(
                 "COVER_LETTER_FALLBACK_PATH", "identity/cover_letter_fallback.txt"
             ),
+            cover_letter_mode=os.getenv("COVER_LETTER_MODE", "always"),
             # Resume
             resume_path=os.getenv("RESUME_PATH", "identity/resume.md"),
             # HH advanced pre-filter
