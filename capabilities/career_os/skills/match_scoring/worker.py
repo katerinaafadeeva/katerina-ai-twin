@@ -274,12 +274,16 @@ async def scoring_worker(bot: Bot) -> None:
                             )
 
                         elif decision.action_type == ActionType.APPROVAL_REQUIRED:
-                            cl_preview = ""
+                            cl_section = ""
                             if cover_letter_text:
-                                preview = cover_letter_text[:200]
-                                if len(cover_letter_text) > 200:
-                                    preview += "..."
-                                cl_preview = f"\n\n📝 Сопроводительное:\n{preview}"
+                                # Show full cover letter text (truncated only if message
+                                # would exceed Telegram's 4096-char limit).
+                                header = "\n\n📝 Сопроводительное:\n"
+                                max_letter = 4096 - 500 - len(header)  # 500 reserved for header/score
+                                letter_body = cover_letter_text
+                                if len(letter_body) > max_letter:
+                                    letter_body = letter_body[:max_letter] + "…"
+                                cl_section = f"{header}{letter_body}"
 
                             hh_suffix = f"\n🔗 {hh_url}" if hh_url else ""
                             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -297,7 +301,7 @@ async def scoring_worker(bot: Bot) -> None:
                                 f"Score: {result.score}/10 | {decision.reason}\n"
                                 f"{result.explanation}"
                                 f"{hh_suffix}"
-                                f"{cl_preview}",
+                                f"{cl_section}",
                                 reply_markup=keyboard,
                             )
 

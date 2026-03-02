@@ -10,19 +10,38 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# letter_status values that indicate the letter was successfully sent
+_LETTER_SENT = {"sent_popup", "sent_inline", "sent_post_apply"}
+_LETTER_SENT_CHAT = "sent_chat"
+_LETTER_NOT_SENT = {"no_field_found", "chat_closed", "fill_failed"}
+
 
 async def notify_apply_done(
     bot,
     chat_id: int,
     job_raw_id: int,
     apply_url: str,
+    letter_status: Optional[str] = None,
 ) -> None:
-    """Notify operator that an application was submitted successfully."""
+    """Notify operator that an application was submitted.
+
+    Message text depends on whether a cover letter was attached:
+      sent_popup/inline/post_apply → ✅ Отклик + 📝 письмо
+      sent_chat                    → ✅ Отклик + 💬 письмо в чате
+      no_field_found/closed/failed → ⚠️ Отклик без письма (reason)
+      not_requested / None         → ✅ Отклик отправлен
+    """
     try:
-        await bot.send_message(
-            chat_id,
-            f"✅ Отклик отправлен: вакансия #{job_raw_id}\n{apply_url}",
-        )
+        if letter_status in _LETTER_SENT:
+            text = f"✅ Отклик + 📝 письмо: #{job_raw_id}\n{apply_url}"
+        elif letter_status == _LETTER_SENT_CHAT:
+            text = f"✅ Отклик + 💬 письмо в чате: #{job_raw_id}\n{apply_url}"
+        elif letter_status in _LETTER_NOT_SENT:
+            text = f"⚠️ Отклик без письма ({letter_status}): #{job_raw_id}\n{apply_url}"
+        else:
+            # not_requested or legacy None
+            text = f"✅ Отклик отправлен: #{job_raw_id}\n{apply_url}"
+        await bot.send_message(chat_id, text)
     except Exception:
         logger.exception("Failed to send apply_done notification for job %d", job_raw_id)
 
