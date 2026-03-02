@@ -9,11 +9,22 @@ Schema separation:
 
 apply_runs.status values:
   done            — application submitted successfully
+  done_without_letter — legacy; treated as done for counting/retry purposes
   already_applied — already applied before this cycle (not a retry candidate)
   manual_required — apply button absent; operator must act manually
   captcha         — captcha detected; batch stopped
   session_expired — auth state expired; re-bootstrap required
   failed          — unexpected error (will be retried up to MAX_ATTEMPTS)
+
+apply_runs.letter_status values (migration 009):
+  not_requested   — cover_letter was empty
+  sent_popup      — letter sent via popup textarea (Path A)
+  sent_inline     — letter sent via inline form (Path B)
+  sent_post_apply — letter sent via post-apply textarea (Path C)
+  sent_chat       — letter sent via employer chat (Path D)
+  no_field_found  — letter provided but no field found anywhere
+  chat_closed     — chat path reached but employer closed chat
+  fill_failed     — textarea found but fill/submit did not complete
 """
 
 import logging
@@ -90,24 +101,39 @@ def save_apply_run(
     error: Optional[str] = None,
     apply_url: Optional[str] = None,
     finished_at: Optional[str] = None,
+    # Telemetry fields (migration 009)
+    flow_type: Optional[str] = None,
+    letter_status: Optional[str] = None,
+    letter_len: int = 0,
+    textarea_found: bool = False,
+    detected_outcome: Optional[str] = None,
+    final_url: Optional[str] = None,
+    chat_available: bool = False,
 ) -> int:
     """Insert a new apply_run record. Returns row-id.
 
     started_at defaults to datetime('now') in the DB column definition.
     finished_at should be set to the completion time.
+    Telemetry fields are optional; older callers without them receive defaults.
     """
     cursor = conn.execute(
         """
         INSERT OR IGNORE INTO apply_runs
-            (action_id, attempt, status, error, apply_url, finished_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+            (action_id, attempt, status, error, apply_url, finished_at,
+             flow_type, letter_status, letter_len, textarea_found,
+             detected_outcome, final_url, chat_available)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (action_id, attempt, status, error, apply_url, finished_at),
+        (
+            action_id, attempt, status, error, apply_url, finished_at,
+            flow_type, letter_status, letter_len, int(textarea_found),
+            detected_outcome, final_url, int(chat_available),
+        ),
     )
     rowid = cursor.lastrowid if cursor.rowcount > 0 else 0
     logger.debug(
-        "apply_run saved: action_id=%d attempt=%d status=%s rowid=%d",
-        action_id, attempt, status, rowid,
+        "apply_run saved: action_id=%d attempt=%d status=%s letter_status=%s rowid=%d",
+        action_id, attempt, status, letter_status or "-", rowid,
     )
     return rowid
 
@@ -115,7 +141,7 @@ def save_apply_run(
 def get_today_apply_count(conn: sqlite3.Connection) -> int:
     """Count successful applies today (UTC). Used to enforce APPLY_DAILY_CAP.
 
-    Counts apply_runs with status='done' and date(finished_at)=today.
+    Counts apply_runs with status='done' (and legacy 'done_without_letter') today.
     """
     row = conn.execute(
         """

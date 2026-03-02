@@ -9,23 +9,33 @@ Design rules:
 - Playwright imported lazily (never at module level)
 - Every DOM interaction wrapped in try/except at the caller level
 
-HH apply paths (confirmed from production HTML artifacts):
+HH letter-attachment paths (tried in order after apply success):
 
   Path A — Popup:
     click apply → modal popup opens → SUBMIT_BUTTON appears →
-    fill COVER_LETTER_TEXTAREA (optional) → click SUBMIT_BUTTON → DONE
+    fill COVER_LETTER_TEXTAREA (optional) → click SUBMIT_BUTTON → submitted.
+    If popup had no textarea → continue fallback chain (C, D).
 
   Path B — Inline (quick apply):
-    click apply → page updates inline → RESPONSE_TOPIC_LINK (Чат) appears →
-    INLINE_LETTER_FORM appears simultaneously (optional cover letter field) →
-    fill INLINE_LETTER_TEXTAREA → click INLINE_LETTER_SUBMIT → DONE
+    click apply → page updates inline → INLINE_LETTER_FORM appears →
+    fill INLINE_LETTER_TEXTAREA → click INLINE_LETTER_SUBMIT → sent_inline.
+    If fill fails → continue fallback chain (C, D).
 
-  Both paths may be preceded by a cookies banner that must be dismissed.
+  Path C — Post-apply textarea (NEW):
+    After apply → POST_APPLY_LETTER_TEXTAREA appears on vacancy page →
+    fill → click POST_APPLY_LETTER_SUBMIT → sent_post_apply.
+
+  Path D — Chat (NEW, last resort):
+    RESPONSE_TOPIC_LINK visible → click → navigate to chat page →
+    fill CHAT_MESSAGE_INPUT → click CHAT_SEND_BUTTON → sent_chat.
+    If chat is closed → chat_closed.
+
+  After all paths → no_field_found.
 """
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -42,12 +52,6 @@ _ARTIFACT_DIR = "/tmp/hh_apply_artifacts"
 
 # Combined CSS selector waited for after clicking apply.
 # First match determines which path HH used.
-# Confirmed outcomes from production:
-#   INLINE_LETTER_FORM + RESPONSE_TOPIC_LINK = quick-apply path
-#   SUBMIT_BUTTON                             = popup path
-#   SUCCESS_TOAST / RESPONSE_SENT_LABEL       = fast success without form
-#   ALREADY_APPLIED                            = was already applied
-#   CAPTCHA_WRAPPER                            = captcha
 _POST_CLICK_OUTCOMES = ", ".join([
     selectors.INLINE_LETTER_FORM,   # quick-apply: inline letter form (Path B)
     selectors.RESPONSE_TOPIC_LINK,  # quick-apply: chat link (strong success signal)
@@ -67,10 +71,20 @@ _DIAGNOSTIC_INLINE = "inline_letter_form_appeared"
 _DIAGNOSTIC_CHAT = "already_applied_with_chat"
 _DIAGNOSTIC_UNKNOWN = "unknown_ui"
 
+# letter_status constants
+_LS_NOT_REQUESTED = "not_requested"
+_LS_SENT_POPUP = "sent_popup"
+_LS_SENT_INLINE = "sent_inline"
+_LS_SENT_POST_APPLY = "sent_post_apply"
+_LS_SENT_CHAT = "sent_chat"
+_LS_NO_FIELD = "no_field_found"
+_LS_CHAT_CLOSED = "chat_closed"
+_LS_FILL_FAILED = "fill_failed"
+
 
 class ApplyStatus(str, Enum):
-    DONE = "done"                        # Application submitted with cover letter
-    DONE_WITHOUT_LETTER = "done_without_letter"  # Submitted; no letter field found
+    DONE = "done"                        # Application submitted (letter_status shows letter fate)
+    DONE_WITHOUT_LETTER = "done_without_letter"  # Legacy; kept for DB backward compatibility
     ALREADY_APPLIED = "already_applied"  # Candidate already applied
     MANUAL_REQUIRED = "manual_required"  # Needs operator: external/questionnaire/phone
     CAPTCHA = "captcha"                  # Captcha detected — stop entire batch
@@ -83,10 +97,18 @@ class ApplyResult:
     status: ApplyStatus
     error: str = ""
     apply_url: str = ""
+    # Telemetry fields (populated on DONE; empty/default on other statuses)
+    letter_status: str = _LS_NOT_REQUESTED  # fate of the cover letter
+    flow_type: str = "unknown"              # which apply path was used
+    textarea_found: bool = False            # was a letter textarea found?
+    detected_outcome: str = ""             # first outcome selector that fired
+    final_url: str = ""                    # page.url after all actions
+    chat_available: bool = False           # was the chat button visible?
+    letter_len: int = 0                    # len of cover_letter text attempted
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Low-level helpers
 # ---------------------------------------------------------------------------
 
 
@@ -201,11 +223,7 @@ async def _save_fail_artifacts(page, vacancy_url: str) -> str:
 async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool:
     """Fill and submit the inline cover letter form (Path B).
 
-    The inline form (vacancy-response-letter-informer) appears on the vacancy
-    page after quick apply. Submitting it sends the letter to the employer chat.
-
-    Returns:
-        True if the letter was filled and submitted successfully.
+    Returns True if filled and submitted successfully.
     """
     try:
         textarea = await page.query_selector(selectors.INLINE_LETTER_TEXTAREA)
@@ -214,8 +232,7 @@ async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool
             value = await textarea.input_value()
             if not value:
                 logger.warning(
-                    "Inline letter fill may have failed — value empty after fill on %s",
-                    vacancy_url,
+                    "Inline letter fill may have failed — value empty on %s", vacancy_url
                 )
                 return False
             logger.info("Inline cover letter filled (%d chars) for %s", len(value), vacancy_url)
@@ -230,6 +247,169 @@ async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool
     return False
 
 
+async def _send_letter_via_chat(page, cover_letter: str, vacancy_url: str) -> str:
+    """Navigate to employer chat and send cover letter (Path D).
+
+    Returns: 'sent_chat' | 'chat_closed' | 'no_field_found'
+    """
+    try:
+        chat_link = await page.query_selector(selectors.RESPONSE_TOPIC_LINK)
+        if not chat_link or not await chat_link.is_visible():
+            return _LS_NO_FIELD
+
+        await chat_link.click()
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:
+            pass
+
+        # Check if employer has closed chat
+        try:
+            closed = await page.query_selector(selectors.CHAT_CLOSED_INDICATOR)
+            if closed and await closed.is_visible():
+                logger.info("Chat is closed for %s", vacancy_url)
+                return _LS_CHAT_CLOSED
+        except Exception:
+            pass
+
+        # Find message input
+        msg_input = None
+        try:
+            msg_input = await page.wait_for_selector(
+                selectors.CHAT_MESSAGE_INPUT, timeout=_QUICK_TIMEOUT_MS
+            )
+        except Exception:
+            pass
+
+        if not msg_input or not await msg_input.is_visible():
+            logger.warning("Chat message input not found for %s", vacancy_url)
+            return _LS_NO_FIELD
+
+        await msg_input.fill(cover_letter)
+
+        send_btn = await page.query_selector(selectors.CHAT_SEND_BUTTON)
+        if send_btn and await send_btn.is_visible():
+            await send_btn.click()
+            logger.info(
+                "Cover letter sent via chat for %s (len=%d)", vacancy_url, len(cover_letter)
+            )
+            return _LS_SENT_CHAT
+
+        logger.warning("Chat send button not found for %s", vacancy_url)
+        return _LS_NO_FIELD
+    except Exception as exc:
+        logger.warning("Chat letter send error on %s: %s", vacancy_url, exc)
+        return _LS_NO_FIELD
+
+
+# ---------------------------------------------------------------------------
+# Cover letter attachment fallback chain
+# ---------------------------------------------------------------------------
+
+
+async def _attach_cover_letter(
+    page, cover_letter: str, vacancy_url: str
+) -> tuple:
+    """Try to attach cover letter via ordered fallback chain after apply success.
+
+    Called after the apply button was clicked and success confirmed.
+    Does NOT handle popup textarea (popup is submitted before this call).
+
+    Fallback order: inline → post_apply → chat
+
+    Returns:
+        (letter_status, textarea_found, chat_available, final_url)
+    """
+    textarea_found = False
+    chat_available = False
+    final_url = vacancy_url
+    try:
+        final_url = page.url
+    except Exception:
+        pass
+
+    # --- Step 1 (inline): wait briefly for inline form to appear ---
+    logger.info("cover_letter_attach: step=inline vacancy=%s", vacancy_url)
+    try:
+        inline_el = None
+        try:
+            inline_el = await page.wait_for_selector(
+                selectors.INLINE_LETTER_FORM, timeout=_QUICK_TIMEOUT_MS
+            )
+        except Exception:
+            inline_el = await page.query_selector(selectors.INLINE_LETTER_FORM)
+
+        if inline_el and await inline_el.is_visible():
+            logger.info("cover_letter_attach: step=inline found=true")
+            textarea_found = True
+            filled = await _fill_inline_letter(page, cover_letter, vacancy_url)
+            if filled:
+                logger.info(
+                    "cover_letter_attach: result=sent_inline letter_len=%d vacancy=%s",
+                    len(cover_letter), vacancy_url,
+                )
+                return _LS_SENT_INLINE, True, chat_available, final_url
+            logger.warning("cover_letter_attach: step=inline fill_failed vacancy=%s", vacancy_url)
+            return _LS_FILL_FAILED, True, chat_available, final_url
+        else:
+            logger.info("cover_letter_attach: step=inline found=false")
+    except Exception as exc:
+        logger.warning("cover_letter_attach: inline error on %s: %s", vacancy_url, exc)
+
+    # --- Step 2 (post_apply): check for post-apply textarea ---
+    logger.info("cover_letter_attach: step=post_apply vacancy=%s", vacancy_url)
+    try:
+        pa_textarea = await page.query_selector(selectors.POST_APPLY_LETTER_TEXTAREA)
+        if pa_textarea and await pa_textarea.is_visible():
+            logger.info("cover_letter_attach: step=post_apply found=true")
+            textarea_found = True
+            await pa_textarea.fill(cover_letter)
+            value = await pa_textarea.input_value()
+            if value:
+                pa_submit = await page.query_selector(selectors.POST_APPLY_LETTER_SUBMIT)
+                if pa_submit and await pa_submit.is_visible():
+                    await pa_submit.click()
+                    logger.info(
+                        "cover_letter_attach: result=sent_post_apply letter_len=%d vacancy=%s",
+                        len(cover_letter), vacancy_url,
+                    )
+                    return _LS_SENT_POST_APPLY, True, chat_available, final_url
+            logger.warning(
+                "cover_letter_attach: step=post_apply fill_failed vacancy=%s", vacancy_url
+            )
+            return _LS_FILL_FAILED, True, chat_available, final_url
+        else:
+            logger.info("cover_letter_attach: step=post_apply found=false")
+    except Exception as exc:
+        logger.warning("cover_letter_attach: post_apply error on %s: %s", vacancy_url, exc)
+
+    # --- Step 3 (chat): navigate to employer chat ---
+    logger.info("cover_letter_attach: step=chat vacancy=%s", vacancy_url)
+    try:
+        chat_link = await page.query_selector(selectors.RESPONSE_TOPIC_LINK)
+        if chat_link and await chat_link.is_visible():
+            chat_available = True
+            chat_status = await _send_letter_via_chat(page, cover_letter, vacancy_url)
+            try:
+                final_url = page.url
+            except Exception:
+                pass
+            logger.info(
+                "cover_letter_attach: result=%s letter_len=%d vacancy=%s",
+                chat_status, len(cover_letter), vacancy_url,
+            )
+            return chat_status, chat_status == _LS_SENT_CHAT, True, final_url
+        else:
+            logger.info("cover_letter_attach: step=chat found=false")
+    except Exception as exc:
+        logger.warning("cover_letter_attach: chat error on %s: %s", vacancy_url, exc)
+
+    logger.warning(
+        "cover_letter_attach: result=no_field_found vacancy=%s", vacancy_url
+    )
+    return _LS_NO_FIELD, False, False, final_url
+
+
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
@@ -238,15 +418,8 @@ async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool
 async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> ApplyResult:
     """Navigate to vacancy page and submit application.
 
-    HH uses two paths after clicking apply:
-      Path B (inline/quick-apply): INLINE_LETTER_FORM + RESPONSE_TOPIC_LINK appear.
-        The inline form IS the cover letter sent to the employer chat.
-        Filling it replaces the need for a separate "go to chat" step.
-      Path A (popup): SUBMIT_BUTTON appears inside a modal dialog.
-
-    Timeout handling (30 s): diagnoses the page HTML to determine what actually
-    happened (already applied, external apply, questionnaire, etc.) and maps to
-    the appropriate status without saving spurious FAILED records.
+    After detecting apply success, always runs the letter attachment fallback chain
+    (inline → post_apply → chat → no_field_found) when cover_letter is provided.
 
     Args:
         page:          Playwright Page (already has auth storage state loaded).
@@ -254,7 +427,7 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         cover_letter:  Cover letter text to insert (may be empty).
 
     Returns:
-        ApplyResult with status and optional error / artifact paths.
+        ApplyResult with status, letter_status, and telemetry fields.
     """
     apply_url = vacancy_url
 
@@ -290,7 +463,9 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         try:
             chat_link = await page.query_selector(selectors.RESPONSE_TOPIC_LINK)
             if chat_link and await chat_link.is_visible():
-                logger.info("Response topic link found pre-click on %s — already applied", vacancy_url)
+                logger.info(
+                    "Response topic link found pre-click on %s — already applied", vacancy_url
+                )
                 return ApplyResult(status=ApplyStatus.ALREADY_APPLIED, apply_url=apply_url)
         except Exception:
             pass
@@ -319,7 +494,6 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         logger.debug("Clicked apply button on %s", vacancy_url)
 
         # --- Multi-outcome wait (30 s) ---
-        # Covers both Path A (popup) and Path B (inline/quick-apply).
         try:
             await page.wait_for_selector(_POST_CLICK_OUTCOMES, timeout=_OUTCOME_TIMEOUT_MS)
         except Exception:
@@ -336,14 +510,29 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 if cover_letter:
                     filled = await _fill_inline_letter(page, cover_letter, vacancy_url)
                     return ApplyResult(
-                        status=ApplyStatus.DONE if filled else ApplyStatus.DONE_WITHOUT_LETTER,
+                        status=ApplyStatus.DONE,
+                        letter_status=_LS_SENT_INLINE if filled else _LS_FILL_FAILED,
+                        flow_type="inline",
+                        textarea_found=True,
+                        detected_outcome=detected,
                         apply_url=apply_url,
+                        letter_len=len(cover_letter),
                     )
-                return ApplyResult(status=ApplyStatus.DONE, apply_url=apply_url)
+                return ApplyResult(
+                    status=ApplyStatus.DONE,
+                    letter_status=_LS_NOT_REQUESTED,
+                    flow_type="inline",
+                    detected_outcome=detected,
+                    apply_url=apply_url,
+                )
 
             # Recoverable: already applied (chat exists)
             if detected == _DIAGNOSTIC_CHAT:
-                return ApplyResult(status=ApplyStatus.ALREADY_APPLIED, apply_url=apply_url)
+                return ApplyResult(
+                    status=ApplyStatus.ALREADY_APPLIED,
+                    detected_outcome=detected,
+                    apply_url=apply_url,
+                )
 
             # Manual required: needs human (external / questionnaire / phone)
             if detected in (_DIAGNOSTIC_EXTERNAL, _DIAGNOSTIC_QUESTIONNAIRE, _DIAGNOSTIC_PHONE):
@@ -355,6 +544,7 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 return ApplyResult(
                     status=ApplyStatus.MANUAL_REQUIRED,
                     error=error[:500],
+                    detected_outcome=detected,
                     apply_url=apply_url,
                 )
 
@@ -372,9 +562,16 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 f"{artifact_suffix}"
             )
             logger.warning("Apply flow timeout FAILED on %s: %s", vacancy_url, error)
-            return ApplyResult(status=ApplyStatus.FAILED, error=error[:500], apply_url=apply_url)
+            return ApplyResult(
+                status=ApplyStatus.FAILED,
+                error=error[:500],
+                detected_outcome=detected,
+                apply_url=apply_url,
+            )
 
-        # --- Outcome arrived — identify which one ---
+        # ---------------------------------------------------------------------------
+        # Outcome arrived — identify which one
+        # ---------------------------------------------------------------------------
 
         # Captcha post-click
         if await _is_captcha_present(page):
@@ -382,7 +579,6 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
             return ApplyResult(status=ApplyStatus.CAPTCHA, apply_url=apply_url)
 
         # Path B: check inline letter form (quick-apply succeeded)
-        # The form appears together with or shortly after RESPONSE_TOPIC_LINK.
         inline_form = None
         try:
             inline_form = await page.query_selector(selectors.INLINE_LETTER_FORM)
@@ -391,48 +587,97 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
 
         if inline_form and await inline_form.is_visible():
             logger.info("Path B (inline): cover letter form detected on %s", vacancy_url)
+            flow_type = "inline"
             if cover_letter:
                 filled = await _fill_inline_letter(page, cover_letter, vacancy_url)
+                if filled:
+                    return ApplyResult(
+                        status=ApplyStatus.DONE,
+                        letter_status=_LS_SENT_INLINE,
+                        flow_type=flow_type,
+                        textarea_found=True,
+                        detected_outcome="inline_form",
+                        apply_url=apply_url,
+                        letter_len=len(cover_letter),
+                    )
+                # Inline fill failed — try remaining fallbacks (post_apply, chat)
+                ls, tf, ca, fu = await _attach_cover_letter(page, cover_letter, vacancy_url)
                 return ApplyResult(
-                    status=ApplyStatus.DONE if filled else ApplyStatus.DONE_WITHOUT_LETTER,
+                    status=ApplyStatus.DONE,
+                    letter_status=ls,
+                    flow_type=flow_type,
+                    textarea_found=tf,
+                    detected_outcome="inline_form",
+                    final_url=fu,
+                    chat_available=ca,
                     apply_url=apply_url,
+                    letter_len=len(cover_letter),
                 )
-            # No cover letter requested — apply succeeded without letter
-            return ApplyResult(status=ApplyStatus.DONE, apply_url=apply_url)
+            # No cover letter requested
+            return ApplyResult(
+                status=ApplyStatus.DONE,
+                letter_status=_LS_NOT_REQUESTED,
+                flow_type=flow_type,
+                detected_outcome="inline_form",
+                apply_url=apply_url,
+            )
 
-        # Chat link without inline form: already applied from before (no letter form offered)
+        # Chat link detected (quick apply without inline form)
         try:
             chat_link = await page.query_selector(selectors.RESPONSE_TOPIC_LINK)
             if chat_link and await chat_link.is_visible():
-                logger.info(
-                    "Path B (inline, no letter form): quick apply succeeded on %s", vacancy_url
-                )
+                logger.info("Path B (quick apply, no inline form) on %s", vacancy_url)
+                flow_type = "quick_apply"
                 if cover_letter:
-                    logger.warning(
-                        "no_cover_letter_field: no inline form on %s — submitted without letter",
-                        vacancy_url,
-                    )
+                    ls, tf, ca, fu = await _attach_cover_letter(page, cover_letter, vacancy_url)
                     return ApplyResult(
-                        status=ApplyStatus.DONE_WITHOUT_LETTER, apply_url=apply_url
+                        status=ApplyStatus.DONE,
+                        letter_status=ls,
+                        flow_type=flow_type,
+                        textarea_found=tf,
+                        detected_outcome="response_topic_link",
+                        final_url=fu,
+                        chat_available=ca,
+                        apply_url=apply_url,
+                        letter_len=len(cover_letter),
                     )
-                return ApplyResult(status=ApplyStatus.DONE, apply_url=apply_url)
+                return ApplyResult(
+                    status=ApplyStatus.DONE,
+                    letter_status=_LS_NOT_REQUESTED,
+                    flow_type=flow_type,
+                    detected_outcome="response_topic_link",
+                    apply_url=apply_url,
+                )
         except Exception:
             pass
 
-        # Success toast (fast success path — no form)
+        # Success toast (fast success path — no form immediately visible)
         try:
             toast = await page.query_selector(selectors.SUCCESS_TOAST)
             if toast and await toast.is_visible():
                 logger.info("Success toast detected on %s (quick apply)", vacancy_url)
+                flow_type = "quick_apply"
                 if cover_letter:
-                    logger.warning(
-                        "no_cover_letter_field: success toast path on %s — submitted without letter",
-                        vacancy_url,
-                    )
+                    # Run full attach chain — inline form may appear shortly after toast
+                    ls, tf, ca, fu = await _attach_cover_letter(page, cover_letter, vacancy_url)
                     return ApplyResult(
-                        status=ApplyStatus.DONE_WITHOUT_LETTER, apply_url=apply_url
+                        status=ApplyStatus.DONE,
+                        letter_status=ls,
+                        flow_type=flow_type,
+                        textarea_found=tf,
+                        detected_outcome="success_toast",
+                        final_url=fu,
+                        chat_available=ca,
+                        apply_url=apply_url,
+                        letter_len=len(cover_letter),
                     )
-                return ApplyResult(status=ApplyStatus.DONE, apply_url=apply_url)
+                return ApplyResult(
+                    status=ApplyStatus.DONE,
+                    letter_status=_LS_NOT_REQUESTED,
+                    flow_type=flow_type,
+                    detected_outcome="success_toast",
+                    apply_url=apply_url,
+                )
         except Exception:
             pass
 
@@ -441,7 +686,27 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
             sent = await page.query_selector(selectors.RESPONSE_SENT_LABEL)
             if sent and await sent.is_visible():
                 logger.info("Response-sent label on %s", vacancy_url)
-                return ApplyResult(status=ApplyStatus.DONE, apply_url=apply_url)
+                flow_type = "quick_apply"
+                if cover_letter:
+                    ls, tf, ca, fu = await _attach_cover_letter(page, cover_letter, vacancy_url)
+                    return ApplyResult(
+                        status=ApplyStatus.DONE,
+                        letter_status=ls,
+                        flow_type=flow_type,
+                        textarea_found=tf,
+                        detected_outcome="response_sent",
+                        final_url=fu,
+                        chat_available=ca,
+                        apply_url=apply_url,
+                        letter_len=len(cover_letter),
+                    )
+                return ApplyResult(
+                    status=ApplyStatus.DONE,
+                    letter_status=_LS_NOT_REQUESTED,
+                    flow_type=flow_type,
+                    detected_outcome="response_sent",
+                    apply_url=apply_url,
+                )
         except Exception:
             pass
 
@@ -470,45 +735,79 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 apply_url=apply_url,
             )
 
-        # --- Path A: fill popup cover letter textarea and submit ---
-        letter_filled = False
-        try:
-            textarea = await page.query_selector(selectors.COVER_LETTER_TEXTAREA)
-            if textarea and await textarea.is_visible():
-                if cover_letter:
+        # --- Path A: fill popup cover letter textarea then submit ---
+        flow_type = "popup"
+        popup_letter_status = _LS_NOT_REQUESTED
+        popup_textarea_found = False
+
+        if cover_letter:
+            try:
+                textarea = await page.query_selector(selectors.COVER_LETTER_TEXTAREA)
+                if textarea and await textarea.is_visible():
+                    popup_textarea_found = True
                     await textarea.fill(cover_letter)
                     value = await textarea.input_value()
                     if value:
-                        letter_filled = True
-                        logger.info("Popup cover letter filled (%d chars)", len(value))
+                        popup_letter_status = _LS_SENT_POPUP
+                        logger.info(
+                            "Popup cover letter filled (%d chars) on %s", len(value), vacancy_url
+                        )
                     else:
                         logger.warning(
                             "Popup letter fill may have failed — value empty on %s", vacancy_url
                         )
                 else:
-                    logger.debug("Popup textarea present but no letter text provided")
-            else:
-                if cover_letter:
-                    logger.warning(
-                        "no_cover_letter_field: popup has no visible textarea on %s — "
-                        "submitting without letter",
-                        vacancy_url,
+                    logger.info(
+                        "cover_letter_attach: step=popup found=false vacancy=%s", vacancy_url
                     )
-        except Exception as exc:
-            logger.warning("Popup cover letter fill error on %s: %s", vacancy_url, exc)
+            except Exception as exc:
+                logger.warning("Popup cover letter fill error on %s: %s", vacancy_url, exc)
 
-        # Submit
+        # Submit popup (apply happens here regardless of letter outcome)
         await submit_btn.click()
         logger.info("Application submitted via popup for %s", vacancy_url)
 
-        # Final captcha check
+        # Final captcha check (some vacancies show captcha after submit)
         if await _is_captcha_present(page):
             logger.warning("Captcha after submit on %s", vacancy_url)
             return ApplyResult(status=ApplyStatus.CAPTCHA, apply_url=apply_url)
 
-        if cover_letter and not letter_filled:
-            return ApplyResult(status=ApplyStatus.DONE_WITHOUT_LETTER, apply_url=apply_url)
-        return ApplyResult(status=ApplyStatus.DONE, apply_url=apply_url)
+        # If letter was successfully sent via popup, we're done
+        if popup_letter_status == _LS_SENT_POPUP:
+            return ApplyResult(
+                status=ApplyStatus.DONE,
+                letter_status=_LS_SENT_POPUP,
+                flow_type=flow_type,
+                textarea_found=True,
+                detected_outcome="popup_submit",
+                apply_url=apply_url,
+                letter_len=len(cover_letter),
+            )
+
+        # Popup had no textarea (or fill failed) — run remaining attach chain
+        if cover_letter:
+            ls, tf, ca, fu = await _attach_cover_letter(page, cover_letter, vacancy_url)
+            # If a fallback path found a textarea, mark it
+            final_textarea_found = popup_textarea_found or tf
+            return ApplyResult(
+                status=ApplyStatus.DONE,
+                letter_status=ls,
+                flow_type=flow_type,
+                textarea_found=final_textarea_found,
+                detected_outcome="popup_submit",
+                final_url=fu,
+                chat_available=ca,
+                apply_url=apply_url,
+                letter_len=len(cover_letter),
+            )
+
+        return ApplyResult(
+            status=ApplyStatus.DONE,
+            letter_status=_LS_NOT_REQUESTED,
+            flow_type=flow_type,
+            detected_outcome="popup_submit",
+            apply_url=apply_url,
+        )
 
     except Exception as exc:
         logger.warning("Apply flow failed for %s: %s", vacancy_url, exc)

@@ -192,6 +192,13 @@ async def _run_apply_cycle(bot: Bot) -> None:
                         error=result.error or None,
                         apply_url=result.apply_url,
                         finished_at=finished_at,
+                        flow_type=result.flow_type or None,
+                        letter_status=result.letter_status or None,
+                        letter_len=result.letter_len,
+                        textarea_found=result.textarea_found,
+                        detected_outcome=result.detected_outcome or None,
+                        final_url=result.final_url or None,
+                        chat_available=result.chat_available,
                     )
                     conn.commit()
 
@@ -213,7 +220,10 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 if result.status in (ApplyStatus.DONE, ApplyStatus.DONE_WITHOUT_LETTER):
                     done_count += 1
                     if chat_id:
-                        await notify_apply_done(bot, chat_id, job_raw_id, result.apply_url)
+                        await notify_apply_done(
+                            bot, chat_id, job_raw_id, result.apply_url,
+                            letter_status=result.letter_status,
+                        )
 
                 elif result.status == ApplyStatus.ALREADY_APPLIED:
                     skipped_count += 1

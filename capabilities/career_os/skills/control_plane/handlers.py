@@ -141,16 +141,24 @@ async def handle_approval_callback(callback: CallbackQuery) -> None:
         actor="operator",
     )
 
-    # 7. Edit message, remove keyboard, then answer callback (stops button spinner last)
-    # Order: update_status → emit → edit_text → edit_reply_markup → callback.answer()
+    # 7. Edit message (append decision suffix, remove keyboard), then answer callback.
+    # Order: update_status → emit → edit_text (with reply_markup=None) → callback.answer()
     # Rationale: status is persisted before any Telegram I/O. If Telegram fails,
     # the DB state is already correct and the button will show "Уже обработано" on retry.
+    # edit_text combines text update + keyboard removal in one API call, avoiding
+    # TelegramBadRequest: "message is not modified" on double-tap.
     if callback.message is not None:
         original_text = callback.message.text or callback.message.caption or ""
-        await callback.message.edit_text(
-            original_text + _STATUS_SUFFIX[new_status]
-        )
-        await callback.message.edit_reply_markup(reply_markup=None)
+        try:
+            await callback.message.edit_text(
+                original_text + _STATUS_SUFFIX[new_status],
+                reply_markup=None,
+            )
+        except Exception as edit_exc:
+            if "message is not modified" not in str(edit_exc).lower():
+                logger.warning(
+                    "Failed to edit approval message for action %d: %s", action_id, edit_exc
+                )
 
     answer_text = _STATUS_ANSWER[new_status]
     await callback.answer(answer_text)
