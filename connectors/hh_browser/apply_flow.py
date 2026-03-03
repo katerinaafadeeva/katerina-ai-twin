@@ -77,13 +77,14 @@ _POST_APPLY_CONFIRM_SIGNALS = ", ".join([
 # Combined CSS selector waited for after clicking apply.
 # First match determines which path HH used.
 _POST_CLICK_OUTCOMES = ", ".join([
-    selectors.INLINE_LETTER_FORM,   # quick-apply: inline letter form (Path B)
-    selectors.RESPONSE_TOPIC_LINK,  # quick-apply: chat link (strong success signal)
-    selectors.SUBMIT_BUTTON,        # popup: submit button inside modal (Path A)
-    selectors.SUCCESS_TOAST,        # generic success toast
-    selectors.RESPONSE_SENT_LABEL,  # generic success label
-    selectors.ALREADY_APPLIED,      # already applied state
-    selectors.CAPTCHA_WRAPPER,      # captcha appeared
+    selectors.INLINE_LETTER_FORM,       # quick-apply: inline letter form (Path B)
+    selectors.RESPONSE_TOPIC_LINK,      # quick-apply: chat link (strong success signal)
+    selectors.SUBMIT_BUTTON,            # popup: submit button inside modal (Path A)
+    selectors.SUCCESS_TOAST,            # generic success toast
+    selectors.RESPONSE_SENT_LABEL,      # generic success label
+    selectors.ALREADY_APPLIED,          # already applied state
+    selectors.CAPTCHA_WRAPPER,          # captcha appeared
+    selectors.EMPLOYER_TEST_REQUIRED,   # employer requires a test (→ MANUAL_REQUIRED)
 ])
 
 # Diagnostic outcomes from HTML parsing (when timeout occurs)
@@ -151,12 +152,16 @@ async def _is_captcha_present(page) -> bool:
 async def _is_session_expired(page) -> bool:
     """Check if we've been redirected to the login page."""
     try:
-        url = page.url
+        url = str(page.url)
         if "login" in url or "account" in url.split("?")[0].split("/")[-1:][0:1]:
             return True
-        el = await page.query_selector(selectors.AUTH_LOGIN_BUTTON)
-        if el and await el.is_visible():
-            return True
+        for selector in (selectors.AUTH_LOGIN_BUTTON, selectors.AUTH_REMEMBER_PASSWORD):
+            try:
+                el = await page.query_selector(selector)
+                if el and await el.is_visible():
+                    return True
+            except Exception:
+                pass
     except Exception:
         pass
     return False
@@ -507,6 +512,23 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         except Exception:
             pass
 
+        # --- Pre-click: employer requires a test/questionnaire ---
+        try:
+            test_el = await page.query_selector(selectors.EMPLOYER_TEST_REQUIRED)
+            if test_el and await test_el.is_visible():
+                logger.info(
+                    "Employer test/questionnaire required (pre-click) on %s — manual action",
+                    vacancy_url,
+                )
+                return ApplyResult(
+                    status=ApplyStatus.MANUAL_REQUIRED,
+                    error="employer_test_required",
+                    detected_outcome="employer_test_required",
+                    apply_url=apply_url,
+                )
+        except Exception:
+            pass
+
         # --- Find apply button ---
         apply_btn = None
         for selector in (selectors.APPLY_BUTTON, selectors.APPLY_BUTTON_BOTTOM):
@@ -526,7 +548,11 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 apply_url=apply_url,
             )
 
-        # --- Click apply button ---
+        # --- Click apply button (wait for element to be stable before clicking) ---
+        try:
+            await apply_btn.wait_for_element_state("stable", timeout=5_000)
+        except Exception:
+            logger.debug("apply_btn stable-wait timed out on %s — clicking anyway", vacancy_url)
         await apply_btn.click()
         logger.debug("Clicked apply button on %s", vacancy_url)
 
@@ -614,6 +640,22 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         if await _is_captcha_present(page):
             logger.warning("Captcha appeared after click on %s", vacancy_url)
             return ApplyResult(status=ApplyStatus.CAPTCHA, apply_url=apply_url)
+
+        # Employer test/questionnaire indicator — appeared after click
+        try:
+            test_el = await page.query_selector(selectors.EMPLOYER_TEST_REQUIRED)
+            if test_el and await test_el.is_visible():
+                logger.info(
+                    "Employer test required (post-click) on %s — manual action", vacancy_url
+                )
+                return ApplyResult(
+                    status=ApplyStatus.MANUAL_REQUIRED,
+                    error="employer_test_required",
+                    detected_outcome="employer_test_required",
+                    apply_url=apply_url,
+                )
+        except Exception:
+            pass
 
         # Path B: check inline letter form (quick-apply succeeded)
         inline_form = None
@@ -803,8 +845,34 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         popup_letter_status = _LS_NOT_REQUESTED
         popup_textarea_found = False
 
+        # Detect employer questions inside popup — cannot answer programmatically.
+        try:
+            question_el = await page.query_selector(selectors.POPUP_QUESTION)
+            if question_el and await question_el.is_visible():
+                logger.info(
+                    "Popup has employer questions on %s — manual action required", vacancy_url
+                )
+                return ApplyResult(
+                    status=ApplyStatus.MANUAL_REQUIRED,
+                    error="popup_employer_questions",
+                    detected_outcome="popup_employer_questions",
+                    flow_type=flow_type,
+                    apply_url=apply_url,
+                )
+        except Exception:
+            pass
+
         if cover_letter:
             try:
+                # Some popups hide the textarea behind a toggle — click it first.
+                try:
+                    toggle = await page.query_selector(selectors.COVER_LETTER_TOGGLE)
+                    if toggle and await toggle.is_visible():
+                        await toggle.click()
+                        logger.debug("Clicked letter toggle on %s", vacancy_url)
+                except Exception:
+                    pass
+
                 textarea = await page.query_selector(selectors.COVER_LETTER_TEXTAREA)
                 if textarea and await textarea.is_visible():
                     popup_textarea_found = True
@@ -838,6 +906,13 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
             )
         except Exception:
             artifact_suffix = await _save_fail_artifacts(page, vacancy_url)
+            # Check if session expired during submit (redirect to login page)
+            if await _is_session_expired(page):
+                logger.warning("Session expired during popup submit on %s", vacancy_url)
+                return ApplyResult(
+                    status=ApplyStatus.SESSION_EXPIRED,
+                    apply_url=apply_url,
+                )
             logger.warning(
                 "Popup submit timeout — no success signal on %s%s",
                 vacancy_url,

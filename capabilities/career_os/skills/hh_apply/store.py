@@ -59,6 +59,8 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
             a.id            AS action_id,
             a.job_raw_id,
             a.correlation_id,
+            a.score,
+            a.reason,
             jr.hh_vacancy_id,
             jr.raw_text     AS vacancy_text,
             COALESCE(

@@ -57,14 +57,18 @@ async def notify_manual_required(
     job_raw_id: int,
     apply_url: str,
     action_id: Optional[int] = None,
+    score: Optional[int] = None,
+    reason: Optional[str] = None,
 ) -> None:
     """Notify operator that manual action is required (apply button not found)."""
     try:
         tag = f" [action={action_id}]" if action_id is not None else ""
+        score_line = f"\nScore: {score}" if score is not None else ""
+        reason_line = f"\nПричина: {reason}" if reason else ""
         await bot.send_message(
             chat_id,
-            f"⚠️ Требуется ручное действие: вакансия #{job_raw_id}{tag}\n"
-            f"Кнопка отклика не найдена. Откликнитесь вручную:\n{apply_url}",
+            f"⚠️ Требуется ручное действие: вакансия #{job_raw_id}{tag}{score_line}{reason_line}\n"
+            f"Откликнитесь вручную:\n{apply_url}",
         )
     except Exception:
         logger.exception("Failed to send manual_required notification for job %d", job_raw_id)

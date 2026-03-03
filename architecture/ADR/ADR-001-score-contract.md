@@ -31,11 +31,12 @@ DECISIONS.md (source of truth, написан основателем) устан
 
 ```
 score < 5         → IGNORE
-5 ≤ score ≤ 7     → AUTO_QUEUE (авто-отправка в рамках daily_limit)
-score > 7         → APPROVAL_REQUIRED (показать + cover letter)
+5 ≤ score ≤ 6     → AUTO_QUEUE (авто-отправка в рамках daily_limit)
+score ≥ 7         → APPROVAL_REQUIRED (показать + cover letter)
 ```
 
-Граничные значения: inclusive для AUTO_QUEUE (5 входит, 7 входит). `> 7` — строго (8+).
+Граничные значения: 7 включительно входит в APPROVAL_REQUIRED (`>=`). Диапазон AUTO_QUEUE — [threshold_low, threshold_high − 1], т.е. [5, 6].
+Код: `if score >= threshold_high` — см. `apply_policy/engine.py`.
 
 ### DB Schema
 

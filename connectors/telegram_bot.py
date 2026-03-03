@@ -28,8 +28,23 @@ dp = Dispatcher()
 async def cmd_start(message: Message) -> None:
     if not is_authorized(message):
         return
+    hh_status = "✅ включён" if config.hh_enabled else "⏸ выключен"
+    apply_status = "✅ включён" if config.hh_apply_enabled else "⏸ выключен"
+    schedule_info = ""
+    if config.hh_apply_enabled and config.apply_schedule_enabled:
+        schedule_info = (
+            f"\n🕒 Расписание авто-откликов: пн–пт {config.apply_schedule_hour_start}:00–"
+            f"{config.apply_schedule_hour_end}:00 МСК"
+        )
     await message.answer(
-        "Привет! Перешли мне пост с вакансией, и я её сохраню."
+        "👋 Привет! Я Career OS — твой ИИ-двойник для поиска работы.\n\n"
+        f"HH.ru парсинг: {hh_status}\n"
+        f"Авто-отклики: {apply_status}{schedule_info}\n\n"
+        "Что умею:\n"
+        "• Принимать пересланные вакансии из Telegram-каналов\n"
+        "• Парсить и скорировать вакансии с HH.ru\n"
+        "• Отправлять отклики с сопроводительным письмом\n\n"
+        "Напиши /help чтобы увидеть все команды."
     )
     if not config.allowed_telegram_ids:
         await message.answer(
@@ -63,6 +78,26 @@ async def handle_forward(message: Message) -> None:
         await message.answer(f"Сохранено: #{job_raw_id}")
     else:
         await message.answer(f"Уже в базе: #{job_raw_id}")
+
+
+async def cmd_help(message: Message) -> None:
+    """/help — show all available commands."""
+    if not is_authorized(message):
+        return
+    await message.answer(
+        "📖 Команды бота:\n\n"
+        "/start — статус и возможности бота\n"
+        "/help — этот список\n"
+        "/today — вакансии, обработанные сегодня\n"
+        "/stats — общая статистика\n"
+        "/limits — текущие лимиты (scoring, cover letter, apply)\n"
+        "/apply — показать очередь и запустить авто-отклики\n"
+        "/resume_apply — то же самое (псевдоним)\n"
+        "/hh_login — статус сессии HH.ru и инструкция по входу\n\n"
+        "Пересылка вакансий:\n"
+        "Перешли любое сообщение с текстом вакансии — бот сохранит, оценит и, "
+        "при подходящем score, отправит отклик."
+    )
 
 
 async def cmd_hh_login_help(message: Message) -> None:
@@ -134,12 +169,14 @@ async def main() -> None:
         await cmd_resume_apply(message, bot)
 
     # Operator commands
+    dp.message.register(cmd_help, Command("help"))
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_limits, Command("limits"))
     dp.message.register(cmd_stats, Command("stats"))
     dp.message.register(cmd_hh_login_help, Command("hh_login"))
     dp.message.register(cmd_hh_login_help, Command("hh_login_help"))
     dp.message.register(_handle_resume_apply, Command("resume_apply"))
+    dp.message.register(_handle_resume_apply, Command("apply"))
 
     # Inline button callbacks (approve/reject/snooze)
     dp.callback_query.register(handle_approval_callback)

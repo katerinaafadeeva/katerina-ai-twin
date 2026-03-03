@@ -45,6 +45,10 @@ def _make_config(
     cfg.cover_letter_mode = cover_letter_mode
     cfg.cover_letter_daily_cap = cover_letter_daily_cap
     cfg.profile_path = profile_path
+    # Schedule — disabled by default so tests run without time constraints
+    cfg.apply_schedule_enabled = False
+    cfg.apply_schedule_hour_start = 9
+    cfg.apply_schedule_hour_end = 20
     return cfg
 
 

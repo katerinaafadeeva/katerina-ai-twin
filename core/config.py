@@ -39,6 +39,11 @@ class Config:
     apply_batch_size: int            # max applies per worker cycle
     hh_storage_state_path: str       # path to Playwright browser storage state (gitignored)
 
+    # Apply schedule — restrict auto-apply to weekdays + MSK business hours
+    apply_schedule_enabled: bool     # False → run 24/7; True → respect hour window on weekdays
+    apply_schedule_hour_start: int   # MSK hour to start (0–23, default 9)
+    apply_schedule_hour_end: int     # MSK hour to stop, exclusive (0–23, default 20)
+
     @classmethod
     def from_env(cls) -> "Config":
         ids_raw = os.getenv("ALLOWED_TELEGRAM_IDS", "")
@@ -77,6 +82,10 @@ class Config:
             hh_storage_state_path=os.getenv(
                 "HH_STORAGE_STATE_PATH", "identity/hh_storage_state.json"
             ),
+            # Schedule
+            apply_schedule_enabled=os.getenv("APPLY_SCHEDULE_ENABLED", "true").lower() in ("true", "1", "yes"),
+            apply_schedule_hour_start=int(os.getenv("APPLY_SCHEDULE_HOUR_START", "9")),
+            apply_schedule_hour_end=int(os.getenv("APPLY_SCHEDULE_HOUR_END", "20")),
         )
 
 

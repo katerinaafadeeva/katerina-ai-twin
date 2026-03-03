@@ -186,9 +186,37 @@ async def hh_apply_worker(bot: Bot) -> None:
         await asyncio.sleep(_CYCLE_INTERVAL)
 
 
+def _is_within_apply_schedule() -> bool:
+    """Return True if current time is within the configured apply schedule.
+
+    When apply_schedule_enabled=False, always returns True (24/7 mode).
+    When enabled, returns True only on Mon–Fri within [hour_start, hour_end) MSK (UTC+3).
+    """
+    if not config.apply_schedule_enabled:
+        return True
+    from datetime import timedelta
+    msk_offset = timedelta(hours=3)
+    now_msk = datetime.now(timezone.utc) + msk_offset
+    if now_msk.weekday() >= 5:  # Saturday=5, Sunday=6
+        logger.debug("Apply schedule: weekend — skipping cycle")
+        return False
+    hour = now_msk.hour
+    if not (config.apply_schedule_hour_start <= hour < config.apply_schedule_hour_end):
+        logger.debug(
+            "Apply schedule: hour %d MSK outside window [%d, %d) — skipping cycle",
+            hour, config.apply_schedule_hour_start, config.apply_schedule_hour_end,
+        )
+        return False
+    return True
+
+
 async def _run_apply_cycle(bot: Bot) -> None:
     """Execute one apply cycle: pick tasks → browser → save apply_run → notify."""
     chat_id = config.allowed_telegram_ids[0] if config.allowed_telegram_ids else None
+
+    # --- Schedule check (weekdays + MSK business hours) ---
+    if not _is_within_apply_schedule():
+        return
 
     # --- Daily cap check (before any browser work) ---
     if config.apply_daily_cap > 0:
@@ -354,6 +382,8 @@ async def _run_apply_cycle(bot: Bot) -> None:
                         await notify_manual_required(
                             bot, chat_id, job_raw_id, result.apply_url,
                             action_id=action_id,
+                            score=task.get("score"),
+                            reason=task.get("reason"),
                         )
 
                 elif result.status == ApplyStatus.CAPTCHA:

@@ -24,12 +24,26 @@ RESPONSE_TOPIC_LINK = "[data-qa='vacancy-response-link-view-topic']"
 VACANCY_TITLE = "[data-qa='vacancy-title']"
 
 # --- Apply modal dialog (Path A — popup) ---
-# Textarea for optional cover letter inside the popup
-COVER_LETTER_TEXTAREA = "[data-qa='vacancy-response-popup-letter']"
+# Textarea for optional cover letter inside the popup.
+# HH uses two different data-qa values depending on vacancy type — match both.
+COVER_LETTER_TEXTAREA = (
+    "[data-qa='vacancy-response-popup-letter'],"
+    "[data-qa='vacancy-response-popup-form-letter-input']"
+)
+# Toggle button that reveals the cover letter textarea (must be clicked first
+# when the textarea is hidden behind a "Добавить письмо" toggle).
+COVER_LETTER_TOGGLE = "[data-qa='vacancy-response-letter-toggle']"
 # Submit button inside the apply modal popup
 SUBMIT_BUTTON = "[data-qa='vacancy-response-submit-popup']"
 # Close button (used for cleanup after apply)
 MODAL_CLOSE = "[data-qa='vacancy-response-popup-close']"
+# Employer questionnaire question block inside the popup.
+# When visible, the popup contains required questions — cannot be answered
+# programmatically → classify as MANUAL_REQUIRED.
+POPUP_QUESTION = "[data-qa^='vacancy-response-question']"
+# HH indicator that the employer requires a test/questionnaire before applying.
+# Visible on the vacancy page itself (pre-click check).
+EMPLOYER_TEST_REQUIRED = "[data-qa='employer-asking-for-test']"
 
 # --- Inline apply path (Path B — quick apply / no popup) ---
 # Container for the inline cover letter form (appears after quick apply succeeds).
@@ -72,6 +86,9 @@ COOKIES_ACCEPT = "[data-qa='cookies-policy-informer-accept']"
 AUTH_LOGIN_BUTTON = "[data-qa='login-button']"
 # Auth form input — secondary session check
 AUTH_EMAIL_INPUT = "[data-qa='account-signup-email']"
+# "Remember password" link on login page — another indicator of session expiry
+# (visible when HH redirects to login during or after popup submit)
+AUTH_REMEMBER_PASSWORD = "[data-qa='account-login-remember-password']"
 
 # --- Captcha ---
 # Captcha container — if visible, stop the batch
