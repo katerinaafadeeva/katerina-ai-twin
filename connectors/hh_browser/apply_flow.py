@@ -923,18 +923,49 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 question_el = await page.query_selector(selectors.POPUP_QUESTION)
                 if question_el and await question_el.is_visible():
                     logger.info(
-                        "Popup has employer questions (no textarea) on %s — manual action required",
+                        "Popup has employer questions on %s — attempting auto-fill",
                         vacancy_url,
                     )
-                    return ApplyResult(
-                        status=ApplyStatus.MANUAL_REQUIRED,
-                        error="popup_employer_questions",
-                        detected_outcome="popup_employer_questions",
-                        flow_type=flow_type,
-                        apply_url=apply_url,
+                    from connectors.hh_browser.questionnaire import fill_popup_questionnaire
+                    from capabilities.career_os.models import Profile
+                    from core.config import config as _cfg
+                    try:
+                        _profile = Profile.from_file(_cfg.profile_path)
+                    except Exception:
+                        _profile = None
+                    all_qs_filled, filled_qs, skipped_qs = await fill_popup_questionnaire(
+                        page, _profile, vacancy_url
                     )
-            except Exception:
-                pass
+                    if all_qs_filled:
+                        logger.info(
+                            "Popup questionnaire auto-filled: %s on %s",
+                            filled_qs, vacancy_url,
+                        )
+                        # All questions answered — proceed to submit
+                    elif skipped_qs:
+                        logger.info(
+                            "Popup questionnaire: filled=%s skipped=%s on %s",
+                            filled_qs, skipped_qs, vacancy_url,
+                        )
+                        return ApplyResult(
+                            status=ApplyStatus.MANUAL_REQUIRED,
+                            error=f"popup_questions_unanswered: {skipped_qs[:3]}",
+                            detected_outcome="popup_employer_questions",
+                            flow_type=flow_type,
+                            apply_url=apply_url,
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "Popup questionnaire auto-fill failed on %s: %s — returning manual_required",
+                    vacancy_url, exc,
+                )
+                return ApplyResult(
+                    status=ApplyStatus.MANUAL_REQUIRED,
+                    error="popup_employer_questions",
+                    detected_outcome="popup_employer_questions",
+                    flow_type=flow_type,
+                    apply_url=apply_url,
+                )
 
         # Submit popup (apply happens here regardless of letter outcome)
         await submit_btn.click()

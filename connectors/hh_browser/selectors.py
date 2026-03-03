@@ -41,6 +41,12 @@ MODAL_CLOSE = "[data-qa='vacancy-response-popup-close']"
 # When visible, the popup contains required questions — cannot be answered
 # programmatically → classify as MANUAL_REQUIRED.
 POPUP_QUESTION = "[data-qa^='vacancy-response-question']"
+# Text input inside a question block (salary, experience, etc.)
+QUESTION_INPUT = "input[type='text'], input[type='number'], input:not([type='checkbox']):not([type='radio'])"
+# Textarea inside a question block (free-form answer)
+QUESTION_TEXTAREA = "textarea"
+# Select (dropdown) inside a question block
+QUESTION_SELECT = "select"
 # HH indicator that the employer requires a test/questionnaire before applying.
 # Visible on the vacancy page itself (pre-click check).
 EMPLOYER_TEST_REQUIRED = "[data-qa='employer-asking-for-test']"
