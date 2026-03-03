@@ -262,6 +262,27 @@ async def _save_fail_artifacts(page, vacancy_url: str) -> str:
         return ""
 
 
+async def _is_vacancy_archived(page) -> bool:
+    """Check if the vacancy is archived / expired by the employer.
+
+    Archived vacancies show a banner instead of an apply button.
+    Returns True when the vacancy can no longer be applied to.
+    """
+    try:
+        html = await page.content()
+        html_lower = html.lower()
+        archive_signals = (
+            "вакансия в архиве",
+            "вакансия закрыта",
+            "вакансия снята с публикации",
+            "набор на эту вакансию завершён",
+            "набор завершён",
+        )
+        return any(signal in html_lower for signal in archive_signals)
+    except Exception:
+        return False
+
+
 async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool:
     """Fill and submit the inline cover letter form (Path B).
 
@@ -528,6 +549,20 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 )
         except Exception:
             pass
+
+        # --- Pre-click: archived / expired vacancy ---
+        # HH keeps the URL active but removes the apply button and shows an archive banner.
+        # Detect this early to avoid a misleading "manual_required" notification.
+        if await _is_vacancy_archived(page):
+            logger.info(
+                "Vacancy is archived/expired on %s — treating as already applied", vacancy_url
+            )
+            return ApplyResult(
+                status=ApplyStatus.ALREADY_APPLIED,
+                error="vacancy_archived",
+                apply_url=apply_url,
+                detected_outcome="vacancy_archived",
+            )
 
         # --- Find apply button ---
         apply_btn = None
@@ -845,23 +880,6 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         popup_letter_status = _LS_NOT_REQUESTED
         popup_textarea_found = False
 
-        # Detect employer questions inside popup — cannot answer programmatically.
-        try:
-            question_el = await page.query_selector(selectors.POPUP_QUESTION)
-            if question_el and await question_el.is_visible():
-                logger.info(
-                    "Popup has employer questions on %s — manual action required", vacancy_url
-                )
-                return ApplyResult(
-                    status=ApplyStatus.MANUAL_REQUIRED,
-                    error="popup_employer_questions",
-                    detected_outcome="popup_employer_questions",
-                    flow_type=flow_type,
-                    apply_url=apply_url,
-                )
-        except Exception:
-            pass
-
         if cover_letter:
             try:
                 # Some popups hide the textarea behind a toggle — click it first.
@@ -893,6 +911,30 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                     )
             except Exception as exc:
                 logger.warning("Popup cover letter fill error on %s: %s", vacancy_url, exc)
+
+        # Detect employer questions — return MANUAL_REQUIRED ONLY when the cover letter
+        # textarea was NOT found. On some vacancies HH wraps a required cover letter
+        # textarea inside a vacancy-response-question element; filling it is sufficient
+        # and no manual action is needed. Return MANUAL_REQUIRED only when there are
+        # genuinely unanswerable questions (dropdowns, radio buttons, etc.) and no
+        # textarea was available.
+        if not popup_textarea_found:
+            try:
+                question_el = await page.query_selector(selectors.POPUP_QUESTION)
+                if question_el and await question_el.is_visible():
+                    logger.info(
+                        "Popup has employer questions (no textarea) on %s — manual action required",
+                        vacancy_url,
+                    )
+                    return ApplyResult(
+                        status=ApplyStatus.MANUAL_REQUIRED,
+                        error="popup_employer_questions",
+                        detected_outcome="popup_employer_questions",
+                        flow_type=flow_type,
+                        apply_url=apply_url,
+                    )
+            except Exception:
+                pass
 
         # Submit popup (apply happens here regardless of letter outcome)
         await submit_btn.click()
