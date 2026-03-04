@@ -286,7 +286,8 @@ async def _is_vacancy_archived(page) -> bool:
 async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool:
     """Fill and submit the inline cover letter form (Path B).
 
-    Returns True if filled and submitted successfully.
+    Returns True if the letter was filled, submitted, and the form disappeared
+    (confirming HH accepted the submission). Returns False on any failure.
     """
     try:
         textarea = await page.query_selector(selectors.INLINE_LETTER_TEXTAREA)
@@ -303,6 +304,25 @@ async def _fill_inline_letter(page, cover_letter: str, vacancy_url: str) -> bool
             if submit and await submit.is_visible():
                 await submit.click()
                 logger.info("Inline letter submitted for %s", vacancy_url)
+                # Post-submit verification: wait for the inline form to disappear,
+                # which confirms HH accepted the letter. If the form stays visible,
+                # log a warning but still return True — fill+click completed and a
+                # false-negative here would incorrectly fall back to chat path.
+                try:
+                    await page.wait_for_selector(
+                        selectors.INLINE_LETTER_FORM,
+                        state="hidden",
+                        timeout=5_000,
+                    )
+                    logger.info(
+                        "Inline letter submission confirmed (form hidden) for %s", vacancy_url
+                    )
+                except Exception:
+                    logger.warning(
+                        "Inline letter form still visible 5 s after submit on %s "
+                        "— submission may not have been accepted by HH",
+                        vacancy_url,
+                    )
                 return True
             logger.warning("Inline letter submit button not found on %s", vacancy_url)
     except Exception as exc:

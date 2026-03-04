@@ -23,6 +23,9 @@ async def notify_apply_done(
     apply_url: str,
     letter_status: Optional[str] = None,
     action_id: Optional[int] = None,
+    cover_letter_text: Optional[str] = None,
+    score: Optional[int] = None,
+    vacancy_title: Optional[str] = None,
 ) -> None:
     """Notify operator that an application was submitted.
 
@@ -32,20 +35,36 @@ async def notify_apply_done(
       no_field_found/closed/failed → ⚠️ Отклик без письма (reason)
       not_requested / None         → ✅ Отклик отправлен
 
-    action_id is included in the message so the operator can correlate
-    notifications from multi-vacancy batches with DB records.
+    When cover_letter_text is provided the full letter text is appended
+    (truncated to stay within Telegram's 4096-char limit).
+    score and vacancy_title are shown in the header line when provided.
     """
     try:
         tag = f" [action={action_id}]" if action_id is not None else ""
+        score_line = f" | Score: {score}/10" if score is not None else ""
+        title_line = f"{vacancy_title}\n" if vacancy_title else ""
+
         if letter_status in _LETTER_SENT:
-            text = f"✅ Отклик + 📝 письмо: #{job_raw_id}{tag}\n{apply_url}"
+            header = f"✅ Отклик + 📝 письмо{score_line}: #{job_raw_id}{tag}"
         elif letter_status == _LETTER_SENT_CHAT:
-            text = f"✅ Отклик + 💬 письмо в чате: #{job_raw_id}{tag}\n{apply_url}"
+            header = f"✅ Отклик + 💬 письмо в чате{score_line}: #{job_raw_id}{tag}"
         elif letter_status in _LETTER_NOT_SENT:
-            text = f"⚠️ Отклик без письма ({letter_status}): #{job_raw_id}{tag}\n{apply_url}"
+            header = f"⚠️ Отклик без письма ({letter_status}){score_line}: #{job_raw_id}{tag}"
         else:
             # not_requested or legacy None
-            text = f"✅ Отклик отправлен: #{job_raw_id}{tag}\n{apply_url}"
+            header = f"✅ Отклик отправлен{score_line}: #{job_raw_id}{tag}"
+
+        text = f"{header}\n{title_line}{apply_url}"
+
+        if cover_letter_text:
+            cl_header = "\n\n📝 Сопроводительное:\n"
+            max_letter = 4096 - len(text) - len(cl_header) - 10
+            if max_letter > 50:
+                body = cover_letter_text[:max_letter]
+                if len(cover_letter_text) > max_letter:
+                    body += "…"
+                text += f"{cl_header}{body}"
+
         await bot.send_message(chat_id, text)
     except Exception:
         logger.exception("Failed to send apply_done notification for job %d", job_raw_id)

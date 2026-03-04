@@ -40,6 +40,7 @@ from capabilities.career_os.skills.hh_apply.notifier import (
     notify_manual_required,
     notify_session_expired,
 )
+from capabilities.career_os.skills.control_plane.formatters import extract_vacancy_title
 from capabilities.career_os.models import Profile
 from capabilities.career_os.skills.cover_letter.generator import (
     generate_cover_letter,
@@ -51,6 +52,7 @@ from capabilities.career_os.skills.cover_letter.store import (
 )
 from connectors.hh_browser.apply_flow import ApplyStatus, apply_to_vacancy
 from connectors.hh_browser.client import HHBrowserClient
+from core.apply_logger import log_apply_event
 from core.config import config
 from core.db import get_conn
 from core.events import emit
@@ -365,11 +367,29 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 # --- Telegram notifications per outcome ---
                 if result.status in (ApplyStatus.DONE, ApplyStatus.DONE_WITHOUT_LETTER):
                     done_count += 1
+                    raw_text = task.get("vacancy_text") or ""
+                    _title, _company = extract_vacancy_title(raw_text)
+                    _title_line = _title + (f" — {_company}" if _company else "")
+                    # Persist to apply log (gitignored JSONL file in logs/)
+                    log_apply_event(
+                        job_raw_id=job_raw_id,
+                        hh_vacancy_id=str(hh_vacancy_id or ""),
+                        vacancy_title=_title_line,
+                        apply_url=result.apply_url,
+                        status=result.status.value,
+                        letter_status=result.letter_status or "",
+                        cover_letter_text=cover_letter,
+                        score=task.get("score") or 0,
+                        action_id=action_id,
+                    )
                     if chat_id:
                         await notify_apply_done(
                             bot, chat_id, job_raw_id, result.apply_url,
                             letter_status=result.letter_status,
                             action_id=action_id,
+                            cover_letter_text=cover_letter or None,
+                            score=task.get("score"),
+                            vacancy_title=_title_line or None,
                         )
 
                 elif result.status == ApplyStatus.ALREADY_APPLIED:

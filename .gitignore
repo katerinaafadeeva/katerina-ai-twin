@@ -2,9 +2,21 @@
 data/
 *.db
 __pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
 identity/profile.json
 identity/hh_searches.json
 identity/hh_storage_state.json
 identity/hh_filters.json
 identity/cover_letter_fallback.txt
 identity/resume.md
+# Apply artifacts (screenshots + HTML snapshots from failed applies)
+/tmp/hh_apply_artifacts/
+# Apply log (personal data — never commit)
+logs/*.jsonl
+logs/*.log
+apply_log.jsonl

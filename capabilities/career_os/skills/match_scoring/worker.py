@@ -108,7 +108,11 @@ async def scoring_worker(bot: Bot) -> None:
                         continue
 
                     # --- Scoring daily cap check (before LLM call) ---
-                    if config.hh_scoring_daily_cap > 0:
+                    # TG-forwarded vacancies bypass the daily cap — they are user-initiated
+                    # (operator manually sent the link) and should always be scored regardless
+                    # of how many HH-ingested vacancies were processed today.
+                    is_tg_forward = (vacancy.get("source") or "") == "telegram_forward"
+                    if config.hh_scoring_daily_cap > 0 and not is_tg_forward:
                         with get_conn() as conn:
                             scored_today = get_today_scored_count(conn)
                         if scored_today >= config.hh_scoring_daily_cap:
@@ -270,22 +274,7 @@ async def scoring_worker(bot: Bot) -> None:
                             pass  # silent — no notification
 
                         elif decision.action_type == ActionType.AUTO_APPLY:
-                            hh_suffix = f"\n🔗 {hh_url}" if hh_url else ""
-                            cl_section = ""
-                            if cover_letter_text:
-                                header = "\n\n📝 Сопроводительное:\n"
-                                max_letter = 4096 - 500 - len(header)
-                                letter_body = cover_letter_text[:max_letter]
-                                if len(cover_letter_text) > max_letter:
-                                    letter_body += "…"
-                                cl_section = f"{header}{letter_body}"
-                            await bot.send_message(
-                                chat_id,
-                                f"{emoji} Автоотклик HH: {title_line}\n"
-                                f"Score: {result.score}/10 | {decision.reason}"
-                                f"{hh_suffix}"
-                                f"{cl_section}",
-                            )
+                            pass  # Уведомление придёт от apply worker (с реальным результатом + письмом)
 
                         elif decision.action_type == ActionType.AUTO_QUEUE:
                             cl_section = ""

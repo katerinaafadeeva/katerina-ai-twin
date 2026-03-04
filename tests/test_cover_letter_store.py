@@ -35,10 +35,12 @@ def _insert_job_raw(conn: sqlite3.Connection, hh_id: str = "hh001") -> int:
     return cursor.lastrowid
 
 
-def _insert_action(conn: sqlite3.Connection, job_raw_id: int) -> int:
+def _insert_action(
+    conn: sqlite3.Connection, job_raw_id: int, action_type: str = "AUTO_APPLY"
+) -> int:
     cursor = conn.execute(
-        "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, 'AUTO_APPLY', 'pending')",
-        (job_raw_id,),
+        "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, ?, 'pending')",
+        (job_raw_id, action_type),
     )
     conn.commit()
     return cursor.lastrowid
@@ -164,8 +166,8 @@ class TestGetCoverLetterForJob:
     def test_returns_most_recent_for_job(self, db_conn):
         """If multiple letters for same job_raw_id, return most recent."""
         job_id = _insert_job_raw(db_conn, "hh004")
-        action_id_1 = _insert_action(db_conn, job_id)
-        action_id_2 = _insert_action(db_conn, job_id)
+        action_id_1 = _insert_action(db_conn, job_id, action_type="AUTO_APPLY")
+        action_id_2 = _insert_action(db_conn, job_id, action_type="AUTO_QUEUE")
         # Insert first letter with an explicit old timestamp to avoid same-second ties
         db_conn.execute(
             """INSERT INTO cover_letters

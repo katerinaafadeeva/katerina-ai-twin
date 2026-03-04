@@ -142,7 +142,8 @@ def save_action(
     """
     cursor = conn.execute(
         """
-        INSERT INTO actions (job_raw_id, action_type, status, score, reason, actor, correlation_id)
+        INSERT OR IGNORE INTO actions
+            (job_raw_id, action_type, status, score, reason, actor, correlation_id)
         VALUES (?, ?, 'pending', ?, ?, ?, ?)
         """,
         (
@@ -154,14 +155,21 @@ def save_action(
             correlation_id,
         ),
     )
-    rowid = cursor.lastrowid
-    logger.info(
-        "save_action: persisted action",
-        extra={
-            "job_raw_id": job_raw_id,
-            "action_type": decision.action_type.value,
-            "score": score,
-            "rowid": rowid,
-        },
-    )
+    rowid = cursor.lastrowid if cursor.rowcount > 0 else 0
+    if rowid:
+        logger.info(
+            "save_action: persisted action",
+            extra={
+                "job_raw_id": job_raw_id,
+                "action_type": decision.action_type.value,
+                "score": score,
+                "rowid": rowid,
+            },
+        )
+    else:
+        logger.debug(
+            "save_action: skipped (duplicate job_raw_id=%d action_type=%s)",
+            job_raw_id,
+            decision.action_type.value,
+        )
     return rowid
