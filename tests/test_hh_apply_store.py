@@ -174,8 +174,9 @@ class TestGetPendingApplyTasks:
           - get_pending_apply_tasks must return the letter via job_raw_id fallback
         """
         job_id = _insert_job(db_conn, "fallback_test")
-        # Old action that already has a cover letter (e.g. from APPROVAL_REQUIRED scoring)
-        old_action_id = _insert_action(db_conn, job_id, status="rejected")
+        # Old APPROVAL_REQUIRED action that already has a cover letter
+        # (realistic: scored → APPROVAL_REQUIRED → operator approved → AUTO_APPLY created)
+        old_action_id = _insert_action(db_conn, job_id, action_type="APPROVAL_REQUIRED", status="approved")
         db_conn.execute(
             "INSERT INTO cover_letters (job_raw_id, action_id, letter_text, model, prompt_version)"
             " VALUES (?, ?, 'Inherited letter', 'haiku', 'v1')",
@@ -195,8 +196,9 @@ class TestGetPendingApplyTasks:
         job_id = _insert_job(db_conn, "priority_test")
         action_id = _insert_action(db_conn, job_id)
         # Cover letter for a different old action (job_raw_id match only)
+        # Uses APPROVAL_REQUIRED to avoid UNIQUE constraint with the AUTO_APPLY action above
         old_action_id = db_conn.execute(
-            "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, 'AUTO_APPLY', 'rejected')",
+            "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, 'APPROVAL_REQUIRED', 'approved')",
             (job_id,),
         ).lastrowid
         db_conn.execute(

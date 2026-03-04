@@ -108,7 +108,11 @@ async def scoring_worker(bot: Bot) -> None:
                         continue
 
                     # --- Scoring daily cap check (before LLM call) ---
-                    if config.hh_scoring_daily_cap > 0:
+                    # TG-forwarded vacancies bypass the daily cap — they are user-initiated
+                    # (operator manually sent the link) and should always be scored regardless
+                    # of how many HH-ingested vacancies were processed today.
+                    is_tg_forward = (vacancy.get("source") or "") == "telegram_forward"
+                    if config.hh_scoring_daily_cap > 0 and not is_tg_forward:
                         with get_conn() as conn:
                             scored_today = get_today_scored_count(conn)
                         if scored_today >= config.hh_scoring_daily_cap:
@@ -164,6 +168,18 @@ async def scoring_worker(bot: Bot) -> None:
                     )
 
                     with get_conn() as conn:
+                        # Dedup guard: skip if an action already exists for this job.
+                        # Protects against duplicate scoring cycles or HH ingest races.
+                        existing_row = conn.execute(
+                            "SELECT id FROM actions WHERE job_raw_id = ? LIMIT 1",
+                            (job_raw_id,),
+                        ).fetchone()
+                        if existing_row:
+                            logger.info(
+                                "Action already exists for job_raw_id=%d (id=%d) — skipping emit+notify",
+                                job_raw_id, existing_row[0],
+                            )
+                            continue  # skip emit, cover letter, notification
                         action_rowid = save_action(
                             conn,
                             job_raw_id,
@@ -184,9 +200,9 @@ async def scoring_worker(bot: Bot) -> None:
                         correlation_id=correlation_id,
                     )
 
-                    # --- Cover letter generation (AUTO_APPLY and APPROVAL_REQUIRED only) ---
+                    # --- Cover letter generation (AUTO_APPLY, AUTO_QUEUE, APPROVAL_REQUIRED) ---
                     cover_letter_text = None
-                    if decision.action_type in (ActionType.AUTO_APPLY, ActionType.APPROVAL_REQUIRED):
+                    if decision.action_type in (ActionType.AUTO_APPLY, ActionType.AUTO_QUEUE, ActionType.APPROVAL_REQUIRED):
                         try:
                             reasons_text = "\n".join(
                                 f"- {r.criterion}: {'✓' if r.matched else '✗'} {r.note}"
@@ -258,19 +274,22 @@ async def scoring_worker(bot: Bot) -> None:
                             pass  # silent — no notification
 
                         elif decision.action_type == ActionType.AUTO_APPLY:
-                            hh_suffix = f"\n🔗 {hh_url}" if hh_url else ""
-                            await bot.send_message(
-                                chat_id,
-                                f"{emoji} Автоотклик HH: {title_line}\n"
-                                f"Score: {result.score}/10 | {decision.reason}"
-                                f"{hh_suffix}",
-                            )
+                            pass  # Уведомление придёт от apply worker (с реальным результатом + письмом)
 
                         elif decision.action_type == ActionType.AUTO_QUEUE:
+                            cl_section = ""
+                            if cover_letter_text:
+                                header = "\n\n📝 Сопроводительное (для ручного отклика):\n"
+                                max_letter = 4096 - 500 - len(header)
+                                letter_body = cover_letter_text[:max_letter]
+                                if len(cover_letter_text) > max_letter:
+                                    letter_body += "…"
+                                cl_section = f"{header}{letter_body}"
                             await bot.send_message(
                                 chat_id,
                                 f"{emoji} В очередь: {title_line}\n"
-                                f"Score: {result.score}/10 | {decision.reason}",
+                                f"Score: {result.score}/10 | {decision.reason}"
+                                f"{cl_section}",
                             )
 
                         elif decision.action_type == ActionType.APPROVAL_REQUIRED:

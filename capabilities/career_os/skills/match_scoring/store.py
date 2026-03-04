@@ -37,7 +37,9 @@ def get_unscored_vacancies(
         LEFT JOIN job_scores js
             ON jr.id = js.job_raw_id AND js.scorer_version = ?
         WHERE js.id IS NULL
-        ORDER BY jr.created_at ASC
+        ORDER BY
+            CASE WHEN jr.source = 'telegram_forward' THEN 0 ELSE 1 END,
+            jr.created_at ASC
         """,
         (scorer_version,),
     )
