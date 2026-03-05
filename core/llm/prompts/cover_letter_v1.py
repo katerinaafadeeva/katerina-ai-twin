@@ -23,6 +23,7 @@ STRICT RULES:
 - Detect the language of the vacancy text. If vacancy is in English — write in English. If in Russian — write in Russian.
 - Length: 400–500 CHARACTERS total (not words). Short and specific.
 - TONE: Always positive, enthusiastic, and forward-looking. The candidate WANTS this role.
+- GENDER: The candidate is a woman. In Russian, always use feminine grammatical forms throughout the entire letter: заинтересована (not заинтересован), готова (not готов), уверена (not уверен), рада (not рад), и т.д.
 - FORBIDDEN phrases (NEVER use): "не соответствует", "не подходит", "к сожалению", "однако",
   "not a good fit", "not aligned", "unfortunately", "does not match", or any other negative/
   rejection language. If the vacancy seems like a poor match, focus on transferable skills instead.
