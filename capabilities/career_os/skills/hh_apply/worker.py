@@ -20,7 +20,7 @@ import asyncio
 import logging
 import os
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from aiogram import Bot
@@ -62,6 +62,32 @@ logger = logging.getLogger(__name__)
 
 # How often to run the apply cycle (seconds) — between batches
 _CYCLE_INTERVAL = 300
+
+# Business rule: day-of-week apply cap multipliers (MSK weekday).
+# weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+_WEEKDAY_CAP_MULTIPLIERS: dict[int, float] = {
+    0: 0.5,   # Mon: 50% of peak cap
+    1: 1.0,   # Tue: peak cap (max)
+    2: 1.0,   # Wed: peak cap (max)
+    3: 1.0,   # Thu: peak cap (max)
+    4: 0.2,   # Fri: 20% of peak cap
+    5: 0.0,   # Sat: 0 (also blocked by schedule)
+    6: 0.0,   # Sun: 0 (also blocked by schedule)
+}
+
+
+def _get_effective_apply_cap() -> int:
+    """Return today's apply cap based on MSK weekday and config.apply_daily_cap.
+
+    apply_daily_cap is the peak-day cap (Tue/Wed/Thu = 100%).
+    Mon = 50%, Fri = 20%, Sat/Sun = 0.
+    Returns 0 if apply_daily_cap=0 (no cap mode — passthrough).
+    """
+    if config.apply_daily_cap <= 0:
+        return 0
+    msk_now = datetime.now(timezone.utc) + timedelta(hours=3)
+    multiplier = _WEEKDAY_CAP_MULTIPLIERS.get(msk_now.weekday(), 0.0)
+    return round(config.apply_daily_cap * multiplier)
 
 
 def _now_utc() -> str:
@@ -173,7 +199,8 @@ async def hh_apply_worker(bot: Bot) -> None:
                 pass
 
     logger.info(
-        "HH Apply worker started — cap=%d delay=[%.1f..%.1f]s batch=%d",
+        "HH Apply worker started — peak_cap=%d (Mon=50%% Fri=20%% Sat/Sun=0)"
+        " delay=[%.1f..%.1f]s batch=%d",
         config.apply_daily_cap,
         config.apply_delay_min,
         config.apply_delay_max,
@@ -196,7 +223,6 @@ def _is_within_apply_schedule() -> bool:
     """
     if not config.apply_schedule_enabled:
         return True
-    from datetime import timedelta
     msk_offset = timedelta(hours=3)
     now_msk = datetime.now(timezone.utc) + msk_offset
     if now_msk.weekday() >= 5:  # Saturday=5, Sunday=6
@@ -221,14 +247,15 @@ async def _run_apply_cycle(bot: Bot) -> None:
         return
 
     # --- Daily cap check (before any browser work) ---
-    if config.apply_daily_cap > 0:
+    effective_cap = _get_effective_apply_cap()
+    if effective_cap > 0:
         with get_conn() as conn:
             today_count = get_today_apply_count(conn)
-        if today_count >= config.apply_daily_cap:
+        if today_count >= effective_cap:
             logger.info(
                 "Apply daily cap reached (%d/%d) — skipping cycle",
                 today_count,
-                config.apply_daily_cap,
+                effective_cap,
             )
             # Emit-first durability (same pattern as scoring cap and HOLD summary)
             with get_conn() as conn:
@@ -236,10 +263,10 @@ async def _run_apply_cycle(bot: Bot) -> None:
             if not already_notified and chat_id:
                 emit(
                     "apply.cap_reached",
-                    {"cap": config.apply_daily_cap, "today": today_count},
+                    {"cap": effective_cap, "today": today_count},
                     actor="hh_apply_worker",
                 )
-                await notify_apply_cap_reached(bot, chat_id, config.apply_daily_cap)
+                await notify_apply_cap_reached(bot, chat_id, effective_cap)
             return
 
     # --- Pick pending tasks ---
