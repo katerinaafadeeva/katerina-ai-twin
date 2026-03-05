@@ -34,7 +34,7 @@ class Config:
 
     # HH.ru browser auto-apply
     hh_apply_enabled: bool           # feature flag (default false — safe opt-in)
-    apply_daily_cap: int             # max successful applies per day (0 = no cap)
+    apply_daily_cap: int             # max successful applies on peak days Tue–Thu (0 = no cap). Mon = 50%, Fri = 20%, Sat/Sun = 0.
     apply_delay_min: float           # min seconds between applies (anti-ban)
     apply_delay_max: float           # max seconds between applies (anti-ban)
     apply_batch_size: int            # max applies per worker cycle
@@ -77,7 +77,7 @@ class Config:
             hh_filters_path=os.getenv("HH_FILTERS_PATH", "identity/hh_filters.json"),
             # HH apply
             hh_apply_enabled=os.getenv("HH_APPLY_ENABLED", "false").lower() in ("true", "1", "yes"),
-            apply_daily_cap=int(os.getenv("APPLY_DAILY_CAP", "10")),
+            apply_daily_cap=int(os.getenv("APPLY_DAILY_CAP", "40")),
             apply_delay_min=float(os.getenv("APPLY_DELAY_MIN", "10.0")),
             apply_delay_max=float(os.getenv("APPLY_DELAY_MAX", "30.0")),
             apply_batch_size=int(os.getenv("APPLY_BATCH_SIZE", "5")),
