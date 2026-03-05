@@ -191,6 +191,8 @@ class TestCmdStatsUsesDecisionsToday:
             mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
             mock_cfg.apply_daily_cap = 5
+            mock_cfg.hh_scoring_daily_cap = 40
+            mock_cfg.tg_scoring_daily_cap = 20
 
             await cmd_stats(mock_message)
 
@@ -236,6 +238,8 @@ class TestCmdStatsUsesDecisionsToday:
             mock_gc.return_value.__enter__ = MagicMock(return_value=MagicMock())
             mock_gc.return_value.__exit__ = MagicMock(return_value=False)
             mock_cfg.apply_daily_cap = 5
+            mock_cfg.hh_scoring_daily_cap = 40
+            mock_cfg.tg_scoring_daily_cap = 20
 
             await cmd_stats(mock_message)
 

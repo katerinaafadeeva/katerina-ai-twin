@@ -14,6 +14,9 @@ from capabilities.career_os.skills.vacancy_ingest_hh.worker import hh_ingest_wor
 from capabilities.career_os.skills.hh_apply.worker import hh_apply_worker
 from capabilities.career_os.skills.hh_apply.store import get_pending_apply_tasks
 from capabilities.career_os.skills.hh_apply.notifier import notify_resume_apply
+from capabilities.career_os.skills.cover_letter.store import get_cover_letter_for_action
+from capabilities.career_os.skills.control_plane.formatters import extract_vacancy_title
+from capabilities.career_os.skills.vacancy_ingest_hh.store import get_today_scored_count_by_source
 from capabilities.career_os.skills.control_plane.handlers import (
     cmd_limits,
     cmd_stats,
@@ -75,7 +78,23 @@ async def handle_forward(message: Message) -> None:
     )
 
     if is_new:
-        await message.answer(f"Сохранено: #{job_raw_id}")
+        # Show TG scoring cap status so the operator knows if scoring will happen
+        if config.tg_scoring_daily_cap > 0:
+            with get_conn() as conn:
+                tg_today = get_today_scored_count_by_source(conn, "telegram_forward")
+            cap = config.tg_scoring_daily_cap
+            if tg_today >= cap:
+                await message.answer(
+                    f"Сохранено: #{job_raw_id}\n"
+                    f"⏸ TG-лимит исчерпан ({tg_today}/{cap}) — оценка будет завтра"
+                )
+            else:
+                await message.answer(
+                    f"Сохранено: #{job_raw_id}\n"
+                    f"⏳ Оценка через ~1-2 мин ({tg_today + 1}/{cap})"
+                )
+        else:
+            await message.answer(f"Сохранено: #{job_raw_id}\n⏳ Оценка через ~1-2 мин")
     else:
         await message.answer(f"Уже в базе: #{job_raw_id}")
 
@@ -89,15 +108,72 @@ async def cmd_help(message: Message) -> None:
         "/start — статус и возможности бота\n"
         "/help — этот список\n"
         "/today — вакансии, обработанные сегодня\n"
-        "/stats — общая статистика\n"
+        "/stats — общая статистика + ожидающие одобрения\n"
         "/limits — текущие лимиты (scoring, cover letter, apply)\n"
-        "/apply — показать очередь и запустить авто-отклики\n"
+        "/queue — очередь авто-откликов\n"
+        "/letter <action_id> — показать сопроводительное письмо\n"
+        "/apply — запустить авто-отклики\n"
         "/resume_apply — то же самое (псевдоним)\n"
         "/hh_login — статус сессии HH.ru и инструкция по входу\n\n"
         "Пересылка вакансий:\n"
         "Перешли любое сообщение с текстом вакансии — бот сохранит, оценит и, "
         "при подходящем score, отправит отклик."
     )
+
+
+async def cmd_letter(message: Message) -> None:
+    """/letter <action_id> — show cover letter text for manual copy-paste."""
+    if not is_authorized(message):
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) < 2:
+        await message.answer("Использование: /letter <action_id>")
+        return
+
+    try:
+        action_id = int(parts[1])
+    except ValueError:
+        await message.answer("action_id должен быть числом. Пример: /letter 42")
+        return
+
+    with get_conn() as conn:
+        letter = get_cover_letter_for_action(conn, action_id)
+
+    if not letter:
+        await message.answer(f"Сопроводительное письмо для action_id={action_id} не найдено.")
+        return
+
+    text = f"📝 Сопроводительное [action={action_id}]:\n\n{letter['letter_text']}"
+    if len(text) > 4096:
+        text = text[:4093] + "…"
+    await message.answer(text)
+
+
+async def cmd_queue(message: Message) -> None:
+    """/queue — show pending AUTO_APPLY actions."""
+    if not is_authorized(message):
+        return
+
+    with get_conn() as conn:
+        tasks = get_pending_apply_tasks(conn, limit=20)
+
+    if not tasks:
+        await message.answer("📋 Очередь авто-откликов пуста.")
+        return
+
+    lines = [f"📋 Очередь авто-откликов ({len(tasks)}):"]
+    for t in tasks:
+        raw_text = t.get("vacancy_text") or ""
+        title, company = extract_vacancy_title(raw_text)
+        title_line = title + (f" — {company}" if company else "")
+        score = t.get("score")
+        score_str = f" | {score}/10" if score else ""
+        hh_id = t.get("hh_vacancy_id")
+        url = f"https://hh.ru/vacancy/{hh_id}" if hh_id else ""
+        lines.append(f"\n#{t['action_id']}{score_str}: {title_line}\n  {url}")
+
+    await message.answer("\n".join(lines))
 
 
 async def cmd_hh_login_help(message: Message) -> None:
@@ -173,6 +249,8 @@ async def main() -> None:
     dp.message.register(cmd_today, Command("today"))
     dp.message.register(cmd_limits, Command("limits"))
     dp.message.register(cmd_stats, Command("stats"))
+    dp.message.register(cmd_queue, Command("queue"))
+    dp.message.register(cmd_letter, Command("letter"))
     dp.message.register(cmd_hh_login_help, Command("hh_login"))
     dp.message.register(cmd_hh_login_help, Command("hh_login_help"))
     dp.message.register(_handle_resume_apply, Command("resume_apply"))

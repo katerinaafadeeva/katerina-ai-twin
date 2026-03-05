@@ -18,6 +18,7 @@ from capabilities.career_os.skills.apply_policy.store import (
     get_policy,
     get_today_auto_count,
     get_today_hold_count,
+    has_successful_apply_for_job,
     save_action,
     was_hold_notification_sent_today,
 )
@@ -36,8 +37,9 @@ from capabilities.career_os.skills.cover_letter.store import (
     was_cover_letter_cap_notification_sent_today,
 )
 from capabilities.career_os.skills.vacancy_ingest_hh.store import (
-    get_today_scored_count,
+    get_today_scored_count_by_source,
     was_scoring_cap_notification_sent_today,
+    was_tg_scoring_cap_notification_sent_today,
 )
 from core.config import config
 from core.db import get_conn
@@ -95,7 +97,8 @@ async def scoring_worker(bot: Bot) -> None:
             with get_conn() as conn:
                 unscored = get_unscored_vacancies(conn, scorer_version=PROMPT_VERSION)
 
-            cap_reached_this_cycle = False
+            hh_cap_reached_this_cycle = False
+            tg_cap_reached_this_cycle = False
             for vacancy in unscored:
                 correlation_id = str(uuid4())
                 job_raw_id = vacancy["id"]
@@ -107,22 +110,32 @@ async def scoring_worker(bot: Bot) -> None:
                         )
                         continue
 
-                    # --- Scoring daily cap check (before LLM call) ---
-                    # TG-forwarded vacancies bypass the daily cap — they are user-initiated
-                    # (operator manually sent the link) and should always be scored regardless
-                    # of how many HH-ingested vacancies were processed today.
-                    is_tg_forward = (vacancy.get("source") or "") == "telegram_forward"
-                    if config.hh_scoring_daily_cap > 0 and not is_tg_forward:
-                        with get_conn() as conn:
-                            scored_today = get_today_scored_count(conn)
-                        if scored_today >= config.hh_scoring_daily_cap:
-                            logger.info(
-                                "Scoring daily cap reached (%d/%d) — stopping scoring this cycle",
-                                scored_today,
-                                config.hh_scoring_daily_cap,
-                            )
-                            cap_reached_this_cycle = True
-                            break
+                    # --- Per-source scoring daily cap check (before LLM call) ---
+                    # HH and TG-forward caps are independent — hitting one never blocks the other.
+                    source = (vacancy.get("source") or "")
+                    is_tg_forward = source == "telegram_forward"
+                    if is_tg_forward:
+                        if config.tg_scoring_daily_cap > 0:
+                            with get_conn() as conn:
+                                tg_scored_today = get_today_scored_count_by_source(conn, "telegram_forward")
+                            if tg_scored_today >= config.tg_scoring_daily_cap:
+                                logger.info(
+                                    "TG scoring daily cap reached (%d/%d) — skipping job_raw_id=%d",
+                                    tg_scored_today, config.tg_scoring_daily_cap, job_raw_id,
+                                )
+                                tg_cap_reached_this_cycle = True
+                                continue
+                    else:
+                        if config.hh_scoring_daily_cap > 0:
+                            with get_conn() as conn:
+                                hh_scored_today = get_today_scored_count_by_source(conn, source or "hh")
+                            if hh_scored_today >= config.hh_scoring_daily_cap:
+                                logger.info(
+                                    "HH scoring daily cap reached (%d/%d) — skipping job_raw_id=%d",
+                                    hh_scored_today, config.hh_scoring_daily_cap, job_raw_id,
+                                )
+                                hh_cap_reached_this_cycle = True
+                                continue
 
                     result = await score_vacancy_llm(
                         vacancy_text=vacancy["raw_text"],
@@ -166,6 +179,17 @@ async def scoring_worker(bot: Bot) -> None:
                         daily_limit=policy["daily_limit"],
                         today_auto_count=today_auto_count,
                     )
+
+                    # ISSUE-2: skip AUTO_APPLY if vacancy was already successfully applied to
+                    if decision.action_type == ActionType.AUTO_APPLY:
+                        with get_conn() as conn:
+                            already_applied = has_successful_apply_for_job(conn, job_raw_id)
+                        if already_applied:
+                            logger.info(
+                                "Skipping AUTO_APPLY for job_raw_id=%d — already applied",
+                                job_raw_id,
+                            )
+                            continue
 
                     with get_conn() as conn:
                         # Dedup guard: skip if an action already exists for this job.
@@ -333,9 +357,9 @@ async def scoring_worker(bot: Bot) -> None:
                         extra={"job_raw_id": job_raw_id},
                     )
 
-            # --- Scoring cap notification (once per UTC day) ---
+            # --- HH scoring cap notification (once per UTC day) ---
             # Ordering: emit FIRST (dedup marker), then send_message (same durability pattern as HOLD).
-            if cap_reached_this_cycle and config.allowed_telegram_ids:
+            if hh_cap_reached_this_cycle and config.allowed_telegram_ids:
                 try:
                     with get_conn() as conn:
                         already_notified = was_scoring_cap_notification_sent_today(conn)
@@ -348,11 +372,31 @@ async def scoring_worker(bot: Bot) -> None:
                         chat_id = config.allowed_telegram_ids[0]
                         await bot.send_message(
                             chat_id,
-                            f"🔒 Лимит скоринга достигнут: {config.hh_scoring_daily_cap}/день. "
-                            f"Необработанные вакансии будут оценены завтра.",
+                            f"🔒 Лимит скоринга HH достигнут: {config.hh_scoring_daily_cap}/день. "
+                            f"Необработанные HH-вакансии будут оценены завтра.",
                         )
                 except Exception:
-                    logger.exception("Scoring cap notification failed")
+                    logger.exception("HH scoring cap notification failed")
+
+            # --- TG scoring cap notification (once per UTC day) ---
+            if tg_cap_reached_this_cycle and config.allowed_telegram_ids:
+                try:
+                    with get_conn() as conn:
+                        tg_already_notified = was_tg_scoring_cap_notification_sent_today(conn)
+                    if not tg_already_notified:
+                        emit(
+                            "scoring.tg_cap_reached",
+                            {"cap": config.tg_scoring_daily_cap},
+                            actor="scoring_worker",
+                        )
+                        chat_id = config.allowed_telegram_ids[0]
+                        await bot.send_message(
+                            chat_id,
+                            f"⏸ Лимит скоринга TG достигнут: {config.tg_scoring_daily_cap}/день. "
+                            f"Пересланные вакансии будут оценены завтра.",
+                        )
+                except Exception:
+                    logger.exception("TG scoring cap notification failed")
 
             # --- Cover letter cap notification (once per UTC day) ---
             # emit FIRST (dedup marker), then send_message — same durability pattern as HOLD.

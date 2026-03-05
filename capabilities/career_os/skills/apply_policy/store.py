@@ -173,3 +173,29 @@ def save_action(
             decision.action_type.value,
         )
     return rowid
+
+
+def has_successful_apply_for_job(conn: sqlite3.Connection, job_raw_id: int) -> bool:
+    """Check if a successful apply_run exists for the given job.
+
+    Joins apply_runs with actions to find any successful apply for this job_raw_id.
+    Used to skip AUTO_APPLY for vacancies already applied to (ISSUE-2).
+
+    Args:
+        conn: Open SQLite connection.
+        job_raw_id: FK to job_raw.id.
+
+    Returns:
+        True if any apply_run with status='done' or 'done_without_letter' exists.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM apply_runs ar
+        JOIN actions a ON a.id = ar.action_id
+        WHERE a.job_raw_id = ?
+          AND ar.status IN ('done', 'done_without_letter')
+        LIMIT 1
+        """,
+        (job_raw_id,),
+    ).fetchone()
+    return row is not None

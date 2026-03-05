@@ -29,6 +29,15 @@ from capabilities.career_os.skills.control_plane.store import (
 
 logger = logging.getLogger(__name__)
 
+
+def _pbar(current: int, total: int, width: int = 10) -> str:
+    """ASCII progress bar: _pbar(3, 10) → '███░░░░░░░'."""
+    if total <= 0:
+        return "░" * width
+    filled = round(width * min(current, total) / total)
+    return "█" * filled + "░" * (width - filled)
+
+
 # Mapping from callback action string → DB status
 _ACTION_TO_STATUS = {
     "approve": "approved",
@@ -176,10 +185,19 @@ async def cmd_today(message: Message) -> None:
     at = s["by_action_type"]
     st = s["by_status"]
 
+    hh_scored = s.get("hh_scored_today", 0)
+    tg_scored = s.get("tg_scored_today", 0)
+    hh_cap = config.hh_scoring_daily_cap
+    tg_cap = config.tg_scoring_daily_cap
+    applies_done = s["applies_done"]
+    apply_cap = s["apply_daily_cap"]
+
     text = (
         f"📊 Сегодня ({today_str}):\n\n"
         f"Входящие: {s['total_ingested']}\n"
-        f"Оценено: {s['total_scored']}\n\n"
+        f"Оценено: {s['total_scored']}\n"
+        f"  HH:  {hh_scored}/{hh_cap} {_pbar(hh_scored, hh_cap)}\n"
+        f"  TG:  {tg_scored}/{tg_cap} {_pbar(tg_scored, tg_cap)}\n\n"
         f"По решениям:\n"
         f"  🔴 Игнор: {at['IGNORE']}\n"
         f"  🟡 Авто-очередь: {at['AUTO_QUEUE']}\n"
@@ -191,8 +209,9 @@ async def cmd_today(message: Message) -> None:
         f"  ✅ Одобрено: {st['approved']}\n"
         f"  ❌ Отклонено: {st['rejected']}\n"
         f"  ⏸ Отложено: {st['snoozed']}\n\n"
-        f"Лимит решений: {s['decisions_today']}/{s['daily_limit']} (осталось {max(0, s['daily_limit'] - s['decisions_today'])})\n"
-        f"Отклики HH: {s['applies_done']}/{s['apply_daily_cap']}"
+        f"Лимит решений: {s['decisions_today']}/{s['daily_limit']} "
+        f"(осталось {max(0, s['daily_limit'] - s['decisions_today'])})\n"
+        f"Отклики HH: {applies_done}/{apply_cap} {_pbar(applies_done, apply_cap)}"
     )
     await message.answer(text)
 
@@ -234,10 +253,19 @@ async def cmd_stats(message: Message) -> None:
     at = s["by_action_type"]
     st = s["by_status"]
 
+    hh_scored = s.get("hh_scored_today", 0)
+    tg_scored = s.get("tg_scored_today", 0)
+    hh_cap = config.hh_scoring_daily_cap
+    tg_cap = config.tg_scoring_daily_cap
+    applies_done = s["applies_done"]
+    apply_cap = s["apply_daily_cap"]
+
     text = (
         f"📊 Сегодня ({today_str}):\n\n"
         f"Входящие: {s['total_ingested']}\n"
-        f"Оценено: {s['total_scored']}\n\n"
+        f"Оценено: {s['total_scored']}\n"
+        f"  HH:  {hh_scored}/{hh_cap} {_pbar(hh_scored, hh_cap)}\n"
+        f"  TG:  {tg_scored}/{tg_cap} {_pbar(tg_scored, tg_cap)}\n\n"
         f"По решениям:\n"
         f"  🔴 Игнор: {at['IGNORE']}\n"
         f"  🟡 Авто-очередь: {at['AUTO_QUEUE']}\n"
@@ -249,8 +277,9 @@ async def cmd_stats(message: Message) -> None:
         f"  ✅ Одобрено: {st['approved']}\n"
         f"  ❌ Отклонено: {st['rejected']}\n"
         f"  ⏸ Отложено: {st['snoozed']}\n\n"
-        f"Лимит решений: {s['decisions_today']}/{s['daily_limit']} (осталось {max(0, s['daily_limit'] - s['decisions_today'])})\n"
-        f"Отклики HH: {s['applies_done']}/{s['apply_daily_cap']}\n\n"
+        f"Лимит решений: {s['decisions_today']}/{s['daily_limit']} "
+        f"(осталось {max(0, s['daily_limit'] - s['decisions_today'])})\n"
+        f"Отклики HH: {applies_done}/{apply_cap} {_pbar(applies_done, apply_cap)}\n\n"
     )
 
     # Pending approvals section

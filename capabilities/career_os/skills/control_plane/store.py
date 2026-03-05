@@ -14,6 +14,7 @@ from capabilities.career_os.skills.apply_policy.store import (
     get_today_auto_count,
 )
 from capabilities.career_os.skills.hh_apply.store import get_today_apply_count
+from capabilities.career_os.skills.vacancy_ingest_hh.store import get_today_scored_count_by_source
 
 logger = logging.getLogger(__name__)
 
@@ -161,10 +162,14 @@ def get_today_summary(conn: sqlite3.Connection, apply_daily_cap: int = 0) -> dic
     remaining = max(0, daily_limit - auto_count)
 
     applies_done = get_today_apply_count(conn)
+    hh_scored_today = get_today_scored_count_by_source(conn, "hh")
+    tg_scored_today = get_today_scored_count_by_source(conn, "telegram_forward")
 
     return {
         "total_ingested": total_ingested,
         "total_scored": total_scored,
+        "hh_scored_today": hh_scored_today,
+        "tg_scored_today": tg_scored_today,
         "by_action_type": by_action_type,
         "by_status": by_status,
         "decisions_today": decisions_today,
