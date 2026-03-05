@@ -58,6 +58,24 @@ def get_today_scored_count(conn: sqlite3.Connection) -> int:
     return row[0] if row else 0
 
 
+def get_today_scored_count_by_source(conn: sqlite3.Connection, source: str) -> int:
+    """Count vacancies from a specific source scored today (UTC date).
+
+    Joins job_scores with job_raw to filter by source.
+    Used for per-source daily cap enforcement (HH vs TG-forward).
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) FROM job_scores js
+        JOIN job_raw jr ON jr.id = js.job_raw_id
+        WHERE date(js.scored_at) = date('now')
+          AND jr.source = ?
+        """,
+        (source,),
+    ).fetchone()
+    return row[0] if row else 0
+
+
 def was_scoring_cap_notification_sent_today(conn: sqlite3.Connection) -> bool:
     """Check if a scoring.cap_reached event was emitted today.
 
@@ -67,6 +85,22 @@ def was_scoring_cap_notification_sent_today(conn: sqlite3.Connection) -> bool:
         """
         SELECT 1 FROM events
          WHERE event_name = 'scoring.cap_reached'
+           AND date(created_at) = date('now')
+         LIMIT 1
+        """
+    ).fetchone()
+    return row is not None
+
+
+def was_tg_scoring_cap_notification_sent_today(conn: sqlite3.Connection) -> bool:
+    """Check if a scoring.tg_cap_reached event was emitted today.
+
+    Prevents duplicate Telegram notifications about the TG scoring daily cap.
+    """
+    row = conn.execute(
+        """
+        SELECT 1 FROM events
+         WHERE event_name = 'scoring.tg_cap_reached'
            AND date(created_at) = date('now')
          LIMIT 1
         """
