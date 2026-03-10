@@ -175,6 +175,29 @@ def save_action(
     return rowid
 
 
+def has_any_action_for_job(conn: sqlite3.Connection, job_raw_id: int) -> bool:
+    """Check if ANY action already exists for the given job_raw_id.
+
+    Used in scoring worker to prevent creating a second action (of a different
+    action_type) for the same vacancy when it is re-scored (e.g. after a profile
+    update). The UNIQUE index on (job_raw_id, action_type) prevents exact-type
+    duplicates, but two different action_types for the same job_raw_id are
+    logically inconsistent.
+
+    Args:
+        conn: Open SQLite connection.
+        job_raw_id: FK to job_raw.id.
+
+    Returns:
+        True if at least one action row exists for this job_raw_id.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM actions WHERE job_raw_id = ? LIMIT 1",
+        (job_raw_id,),
+    ).fetchone()
+    return row is not None
+
+
 def has_successful_apply_for_job(conn: sqlite3.Connection, job_raw_id: int) -> bool:
     """Check if a successful apply_run exists for the given job.
 

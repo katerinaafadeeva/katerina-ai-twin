@@ -1,7 +1,9 @@
 """Tests for ISSUE-2: skip AUTO_APPLY if vacancy was already successfully applied to.
+Also covers: has_any_action_for_job — one-action-per-vacancy dedup guard.
 
 Covers:
 - has_successful_apply_for_job: correct True/False based on apply_runs status
+- has_any_action_for_job: True when any action exists, False when none
 - scoring_worker: save_action not called when already applied (mock-based)
 """
 
@@ -11,7 +13,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from capabilities.career_os.skills.apply_policy.store import has_successful_apply_for_job
+from capabilities.career_os.skills.apply_policy.store import (
+    has_any_action_for_job,
+    has_successful_apply_for_job,
+)
 
 _W = "capabilities.career_os.skills.match_scoring.worker"
 
@@ -68,6 +73,53 @@ class TestHasSuccessfulApplyForJob:
         )
         db_conn.commit()
         assert has_successful_apply_for_job(db_conn, 6) is False
+
+
+# ---------------------------------------------------------------------------
+# has_any_action_for_job — one-action-per-vacancy dedup guard
+# ---------------------------------------------------------------------------
+
+
+class TestHasAnyActionForJob:
+    def _insert_job(self, conn, job_raw_id: int) -> None:
+        conn.execute(
+            "INSERT INTO job_raw (id, raw_text, source, source_message_id) VALUES (?, 'text', 'hh', ?)",
+            (job_raw_id, f"hh_{job_raw_id}"),
+        )
+        conn.commit()
+
+    def _insert_action(self, conn, job_raw_id: int, action_type: str) -> None:
+        conn.execute(
+            "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, ?, 'pending')",
+            (job_raw_id, action_type),
+        )
+        conn.commit()
+
+    def test_false_when_no_actions(self, db_conn):
+        self._insert_job(db_conn, 1)
+        assert has_any_action_for_job(db_conn, 1) is False
+
+    def test_true_after_auto_apply_action(self, db_conn):
+        self._insert_job(db_conn, 2)
+        self._insert_action(db_conn, 2, "AUTO_APPLY")
+        assert has_any_action_for_job(db_conn, 2) is True
+
+    def test_true_after_approval_required_action(self, db_conn):
+        self._insert_job(db_conn, 3)
+        self._insert_action(db_conn, 3, "APPROVAL_REQUIRED")
+        assert has_any_action_for_job(db_conn, 3) is True
+
+    def test_true_after_ignore_action(self, db_conn):
+        self._insert_job(db_conn, 4)
+        self._insert_action(db_conn, 4, "IGNORE")
+        assert has_any_action_for_job(db_conn, 4) is True
+
+    def test_false_for_different_job(self, db_conn):
+        """Action on job_raw_id=5 does not affect job_raw_id=6."""
+        self._insert_job(db_conn, 5)
+        self._insert_job(db_conn, 6)
+        self._insert_action(db_conn, 5, "AUTO_APPLY")
+        assert has_any_action_for_job(db_conn, 6) is False
 
 
 # ---------------------------------------------------------------------------

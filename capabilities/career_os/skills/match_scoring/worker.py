@@ -18,6 +18,7 @@ from capabilities.career_os.skills.apply_policy.store import (
     get_policy,
     get_today_auto_count,
     get_today_hold_count,
+    has_any_action_for_job,
     has_successful_apply_for_job,
     save_action,
     was_hold_notification_sent_today,
@@ -192,16 +193,13 @@ async def scoring_worker(bot: Bot) -> None:
                             continue
 
                     with get_conn() as conn:
-                        # Dedup guard: skip if an action already exists for this job.
-                        # Protects against duplicate scoring cycles or HH ingest races.
-                        existing_row = conn.execute(
-                            "SELECT id FROM actions WHERE job_raw_id = ? LIMIT 1",
-                            (job_raw_id,),
-                        ).fetchone()
-                        if existing_row:
+                        # Dedup guard: one action per vacancy (any action_type).
+                        # Prevents a second action of a different type being created
+                        # when the same vacancy is re-scored (e.g. after a profile update).
+                        if has_any_action_for_job(conn, job_raw_id):
                             logger.info(
-                                "Action already exists for job_raw_id=%d (id=%d) — skipping emit+notify",
-                                job_raw_id, existing_row[0],
+                                "Action already exists for job_raw_id=%d — skipping",
+                                job_raw_id,
                             )
                             continue  # skip emit, cover letter, notification
                         action_rowid = save_action(
