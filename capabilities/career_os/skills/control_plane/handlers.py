@@ -8,6 +8,7 @@ Approval callbacks (inline buttons) and operator commands:
 All handlers check authorization. All DB queries are deterministic SQL (no LLM).
 """
 
+import asyncio
 import logging
 from datetime import date
 from typing import Optional, Tuple
@@ -171,6 +172,23 @@ async def handle_approval_callback(callback: CallbackQuery) -> None:
 
     answer_text = _STATUS_ANSWER[new_status]
     await callback.answer(answer_text)
+
+    # 8. On approve: notify operator and schedule immediate apply cycle.
+    if new_status == "approved" and config.hh_apply_enabled:
+        bot = callback.bot
+        if bot:
+            approve_chat_id = config.allowed_telegram_ids[0] if config.allowed_telegram_ids else None
+            if approve_chat_id:
+                try:
+                    await bot.send_message(
+                        approve_chat_id,
+                        "🚀 Одобрено! Отклик будет отправлен в течение 30–90 секунд...",
+                    )
+                except Exception:
+                    logger.warning("Failed to send approve-trigger notification")
+            # Fire-and-forget: start an apply cycle immediately in background.
+            from capabilities.career_os.skills.hh_apply.worker import _run_apply_cycle
+            asyncio.create_task(_run_apply_cycle(bot))
 
 
 async def cmd_today(message: Message) -> None:

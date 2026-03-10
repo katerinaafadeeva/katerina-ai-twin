@@ -29,6 +29,7 @@ from capabilities.career_os.skills.hh_apply.store import (
     get_hh_vacancy_url,
     get_pending_apply_tasks,
     get_today_apply_count,
+    mark_action_skipped,
     save_apply_run,
     was_apply_cap_notification_sent_today,
 )
@@ -421,6 +422,10 @@ async def _run_apply_cycle(bot: Bot) -> None:
 
                 elif result.status == ApplyStatus.ALREADY_APPLIED:
                     skipped_count += 1
+                    # Mark action as skipped so it no longer appears in queue counts.
+                    with get_conn() as conn:
+                        mark_action_skipped(conn, action_id)
+                        conn.commit()
                     # silent — no per-vacancy notification
 
                 elif result.status == ApplyStatus.MANUAL_REQUIRED:
