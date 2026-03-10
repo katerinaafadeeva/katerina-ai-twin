@@ -164,7 +164,13 @@ async def generate_cover_letter(
             model=_MODEL,
             max_tokens=600,
             temperature=0.3,
-            system=SYSTEM_PROMPT,
+            system=[
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user_message}],
         )
 

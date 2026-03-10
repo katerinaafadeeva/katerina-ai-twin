@@ -85,10 +85,19 @@ class TestGetPendingApplyTasks:
         assert tasks[0]["attempt_count"] == 0
         assert "vacancy_text" in tasks[0]  # raw_text exposed for JIT letter generation
 
-    def test_excludes_approval_required(self, db_conn):
+    def test_excludes_approval_required_pending(self, db_conn):
+        """APPROVAL_REQUIRED + pending (not yet approved) must NOT be picked up."""
         job_id = _insert_job(db_conn, "222")
-        _insert_action(db_conn, job_id, action_type="APPROVAL_REQUIRED")
+        _insert_action(db_conn, job_id, action_type="APPROVAL_REQUIRED", status="pending")
         assert get_pending_apply_tasks(db_conn) == []
+
+    def test_includes_approval_required_approved(self, db_conn):
+        """APPROVAL_REQUIRED + approved (operator clicked Approve) IS ready to apply."""
+        job_id = _insert_job(db_conn, "appr_approved")
+        _insert_action(db_conn, job_id, action_type="APPROVAL_REQUIRED", status="approved")
+        tasks = get_pending_apply_tasks(db_conn)
+        assert len(tasks) == 1
+        assert tasks[0]["hh_vacancy_id"] == "appr_approved"
 
     def test_excludes_job_without_hh_vacancy_id(self, db_conn):
         cur = db_conn.execute(
@@ -165,26 +174,19 @@ class TestGetPendingApplyTasks:
         db_conn.commit()
         assert get_pending_apply_tasks(db_conn) == []
 
-    def test_cover_letter_fallback_by_job_raw_id(self, db_conn):
-        """New AUTO_APPLY action inherits cover letter from previous action for same job.
+    def test_cover_letter_for_approval_required_approved(self, db_conn):
+        """APPROVAL_REQUIRED + approved action returns its own cover letter.
 
-        Scenario (mirrors Bug 1 from production):
-          - job_raw_id=X, old action_id=OLD has cover letter
-          - new action_id=NEW for same job has no cover letter row
-          - get_pending_apply_tasks must return the letter via job_raw_id fallback
+        Scenario: scored → APPROVAL_REQUIRED → cover letter generated →
+                  operator approves → get_pending_apply_tasks picks it up with letter.
         """
         job_id = _insert_job(db_conn, "fallback_test")
-        # Old APPROVAL_REQUIRED action that already has a cover letter
-        # (realistic: scored → APPROVAL_REQUIRED → operator approved → AUTO_APPLY created)
-        old_action_id = _insert_action(db_conn, job_id, action_type="APPROVAL_REQUIRED", status="approved")
+        action_id = _insert_action(db_conn, job_id, action_type="APPROVAL_REQUIRED", status="approved")
         db_conn.execute(
             "INSERT INTO cover_letters (job_raw_id, action_id, letter_text, model, prompt_version)"
             " VALUES (?, ?, 'Inherited letter', 'haiku', 'v1')",
-            (job_id, old_action_id),
+            (job_id, action_id),
         )
-        db_conn.commit()
-        # New pending AUTO_APPLY action — no cover_letter row of its own
-        _insert_action(db_conn, job_id, action_type="AUTO_APPLY", status="pending")
         db_conn.commit()
 
         tasks = get_pending_apply_tasks(db_conn)
@@ -195,10 +197,10 @@ class TestGetPendingApplyTasks:
         """Direct action_id match wins over job_raw_id fallback."""
         job_id = _insert_job(db_conn, "priority_test")
         action_id = _insert_action(db_conn, job_id)
-        # Cover letter for a different old action (job_raw_id match only)
-        # Uses APPROVAL_REQUIRED to avoid UNIQUE constraint with the AUTO_APPLY action above
+        # Old rejected APPROVAL_REQUIRED action — excluded from queue because it's rejected,
+        # but its cover letter is still in the DB as a job_raw_id fallback candidate.
         old_action_id = db_conn.execute(
-            "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, 'APPROVAL_REQUIRED', 'approved')",
+            "INSERT INTO actions (job_raw_id, action_type, status) VALUES (?, 'APPROVAL_REQUIRED', 'rejected')",
             (job_id,),
         ).lastrowid
         db_conn.execute(

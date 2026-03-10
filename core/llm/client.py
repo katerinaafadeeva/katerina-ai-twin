@@ -127,7 +127,13 @@ async def call_llm_scoring(
             model=model,
             max_tokens=900,
             temperature=0,
-            system=system_prompt,
+            system=[
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user_message}],
         )
 

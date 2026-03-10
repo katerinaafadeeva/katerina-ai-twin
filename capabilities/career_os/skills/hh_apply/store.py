@@ -41,14 +41,18 @@ _HH_VACANCY_URL = "https://hh.ru/vacancy/{}"
 
 
 def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[dict]:
-    """Return AUTO_APPLY actions ready for browser execution.
+    """Return actions ready for browser execution.
 
-    Criteria:
-    - action_type = 'AUTO_APPLY'
-    - status = 'pending' (not yet operator-approved/rejected/snoozed)
-    - No successful apply_run yet (execution_status != 'done')
+    Picks two sets:
+    - AUTO_APPLY + status='pending'
+    - APPROVAL_REQUIRED + status='approved'  (operator clicked Approve)
+
+    Additional criteria for both:
+    - No successful apply_run yet
+    - No terminal-failure apply_run (already_applied / manual_required / captcha / session_expired)
     - Attempt count in apply_runs < MAX_ATTEMPTS
     - job_raw has hh_vacancy_id (needed to construct apply URL)
+    - No other action for the same hh_vacancy_id is already done (vacancy-level dedup)
 
     Returns attempt_count in each row so caller can compute next attempt number.
     Ordered by created_at ASC (oldest first).
@@ -77,8 +81,11 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
             FROM apply_runs
             GROUP BY action_id
         ) r ON r.action_id = a.id
-        WHERE a.action_type = 'AUTO_APPLY'
-          AND a.status = 'pending'
+        WHERE (
+            (a.action_type = 'AUTO_APPLY'        AND a.status = 'pending')
+            OR
+            (a.action_type = 'APPROVAL_REQUIRED' AND a.status = 'approved')
+        )
           AND jr.hh_vacancy_id IS NOT NULL
           AND NOT EXISTS (
               SELECT 1 FROM apply_runs ar
@@ -90,6 +97,13 @@ def get_pending_apply_tasks(conn: sqlite3.Connection, limit: int = 5) -> List[di
               WHERE ar.action_id = a.id
                 AND ar.status IN ('already_applied', 'manual_required',
                                   'captcha', 'session_expired')
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM apply_runs ar2
+              JOIN actions a2 ON a2.id = ar2.action_id
+              JOIN job_raw jr2 ON jr2.id = a2.job_raw_id
+              WHERE jr2.hh_vacancy_id = jr.hh_vacancy_id
+                AND ar2.status IN ('done', 'done_without_letter', 'already_applied')
           )
           AND COALESCE(r.attempt_count, 0) < ?
         ORDER BY a.created_at ASC
@@ -180,6 +194,27 @@ def was_apply_cap_notification_sent_today(conn: sqlite3.Connection) -> bool:
         """
     ).fetchone()
     return row is not None
+
+
+def mark_action_skipped(conn: sqlite3.Connection, action_id: int) -> bool:
+    """Set actions.status = 'skipped' for an action that returned already_applied.
+
+    Idempotent — only transitions from pending/approved to skipped.
+    Returns True if the row was updated, False if it was already in a terminal state.
+    """
+    cursor = conn.execute(
+        """
+        UPDATE actions
+           SET status = 'skipped', updated_at = datetime('now')
+         WHERE id = ?
+           AND status IN ('pending', 'approved')
+        """,
+        (action_id,),
+    )
+    updated = cursor.rowcount > 0
+    if updated:
+        logger.info("mark_action_skipped: action_id=%d → skipped", action_id)
+    return updated
 
 
 def get_hh_vacancy_url(hh_vacancy_id: str) -> str:
