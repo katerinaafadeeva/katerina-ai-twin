@@ -24,8 +24,10 @@ from capabilities.career_os.skills.apply_policy.store import (
     was_hold_notification_sent_today,
 )
 from capabilities.career_os.skills.match_scoring.handler import score_vacancy_llm
+from capabilities.career_os.skills.match_scoring.pre_filter import should_skip_scoring
 from capabilities.career_os.skills.match_scoring.store import (
     get_unscored_vacancies,
+    get_existing_score_by_hh_vacancy_id,
     save_score,
 )
 from capabilities.career_os.skills.cover_letter.generator import (
@@ -110,6 +112,74 @@ async def scoring_worker(bot: Bot) -> None:
                             extra={"job_raw_id": job_raw_id},
                         )
                         continue
+
+                    # --- Pre-filter (keyword reject without LLM) ---
+                    skip, skip_reason = should_skip_scoring(vacancy["raw_text"])
+                    if skip:
+                        from core.llm.schemas import ScoreReason, ScoringOutput
+                        _pf_result = ScoringOutput(
+                            score=0,
+                            reasons=[ScoreReason(criterion="pre_filter", matched=False, note=skip_reason)],
+                            explanation=f"Pre-filtered: {skip_reason}",
+                        )
+                        with get_conn() as conn:
+                            save_score(
+                                conn,
+                                job_raw_id,
+                                _pf_result,
+                                profile_hash="pre_filter",
+                                model="pre_filter",
+                                prompt_version="pre_filter",
+                                input_tokens=0,
+                                output_tokens=0,
+                                cost_usd=0.0,
+                                scorer_version=PROMPT_VERSION,
+                            )
+                            if not has_any_action_for_job(conn, job_raw_id):
+                                from capabilities.career_os.skills.apply_policy.engine import PolicyDecision
+                                _pf_decision = PolicyDecision(
+                                    action_type=ActionType.IGNORE,
+                                    reason=f"Pre-filtered: {skip_reason}",
+                                )
+                                save_action(conn, job_raw_id, _pf_decision, score=0, correlation_id=correlation_id)
+                            conn.commit()
+                        logger.info(
+                            "Pre-filter rejected vacancy job_raw_id=%d reason=%s",
+                            job_raw_id, skip_reason,
+                        )
+                        continue
+
+                    # --- Score cache (same hh_vacancy_id scored before → reuse) ---
+                    hh_vacancy_id_for_cache = vacancy.get("hh_vacancy_id")
+                    if hh_vacancy_id_for_cache:
+                        with get_conn() as conn:
+                            cached_score = get_existing_score_by_hh_vacancy_id(conn, hh_vacancy_id_for_cache)
+                        if cached_score is not None:
+                            logger.info(
+                                "Score cache hit hh_vacancy_id=%s cached=%d job_raw_id=%d — skipping LLM",
+                                hh_vacancy_id_for_cache, cached_score, job_raw_id,
+                            )
+                            from core.llm.schemas import ScoreReason, ScoringOutput
+                            _cached_result = ScoringOutput(
+                                score=cached_score,
+                                reasons=[ScoreReason(criterion="cache", matched=True, note=f"hh_vacancy_id={hh_vacancy_id_for_cache}")],
+                                explanation=f"Score cached from previous scoring of vacancy {hh_vacancy_id_for_cache}",
+                            )
+                            with get_conn() as conn:
+                                save_score(
+                                    conn,
+                                    job_raw_id,
+                                    _cached_result,
+                                    profile_hash="cache",
+                                    model="cache",
+                                    prompt_version="cache",
+                                    input_tokens=0,
+                                    output_tokens=0,
+                                    cost_usd=0.0,
+                                    scorer_version=PROMPT_VERSION,
+                                )
+                                conn.commit()
+                            continue  # Policy + notifications skipped (same vacancy already processed)
 
                     # --- Per-source scoring daily cap check (before LLM call) ---
                     # HH and TG-forward caps are independent — hitting one never blocks the other.
