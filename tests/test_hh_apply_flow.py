@@ -856,6 +856,37 @@ class TestApplyToVacancy:
         result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111")
         assert result.status == ApplyStatus.ALREADY_APPLIED
 
+    # --- Archive detection regression ---
+
+    @pytest.mark.asyncio
+    async def test_vacancy_with_generic_archive_text_in_body_but_button_visible_is_not_archived(self):
+        """Regression: 'набор завершён' in vacancy description body must NOT
+        trigger ALREADY_APPLIED when the apply button is visible.
+        This was the root cause of the false-positive archive detection bug."""
+        page = _make_page(apply_btn_found=True, submit_popup=True)
+        # Simulate "набор завершён" appearing in vacancy body text (false positive scenario)
+        page.content = AsyncMock(
+            return_value=(
+                "<html><body>Описание вакансии. Набор завершён по старым заявкам. "
+                "<button data-qa='vacancy-response-link-top'>Откликнуться</button>"
+                "</body></html>"
+            )
+        )
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/111")
+        # Must NOT return already_applied — button was visible, vacancy is active
+        assert result.status != ApplyStatus.ALREADY_APPLIED
+
+    @pytest.mark.asyncio
+    async def test_vacancy_archived_detected_only_when_no_button(self):
+        """When apply button is absent AND archive phrase in HTML → ALREADY_APPLIED."""
+        page = _make_page(apply_btn_found=False)
+        page.content = AsyncMock(
+            return_value="<html><body>Вакансия снята с публикации</body></html>"
+        )
+        result = await apply_to_vacancy(page, "https://hh.ru/vacancy/999")
+        assert result.status == ApplyStatus.ALREADY_APPLIED
+        assert result.detected_outcome == "vacancy_archived"
+
     # --- Manual required ---
 
     @pytest.mark.asyncio

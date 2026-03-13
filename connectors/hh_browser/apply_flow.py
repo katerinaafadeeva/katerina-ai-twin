@@ -267,16 +267,21 @@ async def _is_vacancy_archived(page) -> bool:
 
     Archived vacancies show a banner instead of an apply button.
     Returns True when the vacancy can no longer be applied to.
+
+    NOTE: Only call this AFTER confirming the apply button is NOT visible.
+    The text search is intentionally conservative to avoid false positives
+    from vacancy description body text.
     """
     try:
         html = await page.content()
         html_lower = html.lower()
+        # Use only highly specific, unambiguous phrases that HH shows in
+        # the archive banner — NOT generic phrases like "набор завершён"
+        # which can appear in employer-written vacancy descriptions.
         archive_signals = (
             "вакансия в архиве",
-            "вакансия закрыта",
             "вакансия снята с публикации",
             "набор на эту вакансию завершён",
-            "набор завершён",
         )
         return any(signal in html_lower for signal in archive_signals)
     except Exception:
@@ -570,21 +575,9 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
         except Exception:
             pass
 
-        # --- Pre-click: archived / expired vacancy ---
-        # HH keeps the URL active but removes the apply button and shows an archive banner.
-        # Detect this early to avoid a misleading "manual_required" notification.
-        if await _is_vacancy_archived(page):
-            logger.info(
-                "Vacancy is archived/expired on %s — treating as already applied", vacancy_url
-            )
-            return ApplyResult(
-                status=ApplyStatus.ALREADY_APPLIED,
-                error="vacancy_archived",
-                apply_url=apply_url,
-                detected_outcome="vacancy_archived",
-            )
-
         # --- Find apply button ---
+        # NOTE: archive check happens AFTER button search to avoid false positives.
+        # If the apply button is visible, the vacancy is definitely active — skip archive check.
         apply_btn = None
         for selector in (selectors.APPLY_BUTTON, selectors.APPLY_BUTTON_BOTTOM):
             try:
@@ -596,6 +589,18 @@ async def apply_to_vacancy(page, vacancy_url: str, cover_letter: str = "") -> Ap
                 continue
 
         if apply_btn is None:
+            # No apply button found — check if vacancy is archived before MANUAL_REQUIRED.
+            # Only do archive text-search here (after confirming button absent).
+            if await _is_vacancy_archived(page):
+                logger.info(
+                    "Vacancy is archived/expired on %s — treating as already applied", vacancy_url
+                )
+                return ApplyResult(
+                    status=ApplyStatus.ALREADY_APPLIED,
+                    error="vacancy_archived",
+                    apply_url=apply_url,
+                    detected_outcome="vacancy_archived",
+                )
             logger.warning("Apply button not found on %s — manual action required", vacancy_url)
             return ApplyResult(
                 status=ApplyStatus.MANUAL_REQUIRED,
