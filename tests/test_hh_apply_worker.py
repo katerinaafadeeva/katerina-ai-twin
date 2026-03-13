@@ -105,6 +105,7 @@ class TestApplyCycleDailyCap:
              patch("capabilities.career_os.skills.hh_apply.worker.get_conn") as mock_gc, \
              patch("capabilities.career_os.skills.hh_apply.worker.get_today_apply_count", return_value=5), \
              patch("capabilities.career_os.skills.hh_apply.worker.was_apply_cap_notification_sent_today", return_value=False), \
+             patch("capabilities.career_os.skills.hh_apply.worker._get_effective_apply_cap", return_value=5), \
              patch("capabilities.career_os.skills.hh_apply.worker.emit") as mock_emit, \
              patch("capabilities.career_os.skills.hh_apply.worker.notify_apply_cap_reached") as mock_notify:
 

@@ -197,6 +197,7 @@ class TestAutoApplyGuard:
             },
             _W + ".get_today_auto_count": {"return_value": 0},
             _W + ".has_successful_apply_for_job": {"return_value": True},
+            _W + ".has_any_action_for_job": {"return_value": False},
             _W + ".save_action": {"side_effect": save_action_mock},
             _W + ".emit": {"return_value": None},
             _W + ".get_today_hold_count": {"return_value": 0},
@@ -206,6 +207,8 @@ class TestAutoApplyGuard:
             _W + ".was_cover_letter_cap_notification_sent_today": {"return_value": True},
             _W + ".get_today_cover_letter_count": {"return_value": 0},
             _W + ".get_resume_text": {"return_value": "resume"},
+            _W + ".should_skip_scoring": {"return_value": (False, "")},
+            _W + ".get_existing_score_by_hh_vacancy_id": {"return_value": None},
         }
 
         await _run_worker(mock_bot, patches)
@@ -248,6 +251,7 @@ class TestAutoApplyGuard:
             },
             _W + ".get_today_auto_count": {"return_value": 0},
             _W + ".has_successful_apply_for_job": {"return_value": False},
+            _W + ".has_any_action_for_job": {"return_value": False},
             _W + ".save_action": {"side_effect": save_action_mock},
             _W + ".emit": {"return_value": None},
             _W + ".get_today_hold_count": {"return_value": 0},
@@ -262,6 +266,8 @@ class TestAutoApplyGuard:
                 "return_value": ("letter text", False, 10, 5, 0.001),
             },
             _W + ".save_cover_letter": {"return_value": None},
+            _W + ".should_skip_scoring": {"return_value": (False, "")},
+            _W + ".get_existing_score_by_hh_vacancy_id": {"return_value": None},
         }
 
         await _run_worker(mock_bot, patches)

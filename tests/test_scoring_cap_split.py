@@ -138,6 +138,7 @@ async def _run_worker_once(mock_bot, cfg, vacancies, count_by_source_fn):
         },
         _W + ".get_today_auto_count": {"return_value": 0},
         _W + ".has_successful_apply_for_job": {"return_value": False},
+        _W + ".has_any_action_for_job": {"return_value": False},
         _W + ".save_action": {"return_value": 1},
         _W + ".emit": {"return_value": None},
         _W + ".get_today_hold_count": {"return_value": 0},
@@ -147,6 +148,8 @@ async def _run_worker_once(mock_bot, cfg, vacancies, count_by_source_fn):
         _W + ".was_cover_letter_cap_notification_sent_today": {"return_value": True},
         _W + ".get_today_cover_letter_count": {"return_value": 0},
         _W + ".get_resume_text": {"return_value": "resume"},
+        _W + ".should_skip_scoring": {"return_value": (False, "")},
+        _W + ".get_existing_score_by_hh_vacancy_id": {"return_value": None},
     }
 
     with contextlib.ExitStack() as stack:
