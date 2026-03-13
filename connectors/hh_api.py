@@ -100,6 +100,20 @@ class HHApiClient:
         logger.error("HH API max retries (%d) exhausted for %s", MAX_RETRIES, url)
         return None
 
+    async def get_vacancy(self, vacancy_id: str) -> Optional[Dict]:
+        """Fetch a single vacancy by HH ID from the detail endpoint.
+
+        Returns:
+            Vacancy dict on success (includes 'archived' bool, 'type', etc.),
+            or None if the request fails or vacancy is not found.
+        """
+        async with httpx.AsyncClient() as client:
+            return await self._request(
+                client,
+                f"{HH_BASE_URL}/vacancies/{vacancy_id}",
+                {},
+            )
+
     async def search_vacancies(self, query_params: Dict[str, str]) -> List[Dict]:
         """Search HH.ru vacancies with automatic pagination.
 

@@ -161,7 +161,7 @@ def ingest_hh_vacancies(
     Returns:
         Dict with counts: total, new, duplicate, filtered.
     """
-    counts: Dict[str, int] = {"total": 0, "new": 0, "duplicate": 0, "filtered": 0}
+    counts: Dict[str, int] = {"total": 0, "new": 0, "duplicate": 0, "filtered": 0, "archived": 0}
 
     for item in vacancies:
         counts["total"] += 1
@@ -170,6 +170,12 @@ def ingest_hh_vacancies(
 
         if not hh_id:
             logger.warning("HH vacancy missing id — skipping")
+            continue
+
+        # Archived check: skip vacancies HH API flags as archived (e.g. stale search cache)
+        if item.get("archived"):
+            logger.debug("HH vacancy %s is archived — skipping ingest", hh_id)
+            counts["archived"] += 1
             continue
 
         # Dedup level 1: fast HH ID check
