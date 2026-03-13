@@ -198,6 +198,10 @@ async def cmd_today(message: Message) -> None:
 
     with get_conn() as conn:
         s = get_today_summary(conn, apply_daily_cap=config.apply_daily_cap)
+        pf_row = conn.execute(
+            "SELECT COUNT(*) FROM job_scores WHERE date(scored_at) = date('now') AND model = 'pre_filter'"
+        ).fetchone()
+        prefilter_count = pf_row[0] if pf_row else 0
 
     today_str = date.today().strftime("%d.%m.%Y")
     at = s["by_action_type"]
@@ -210,10 +214,12 @@ async def cmd_today(message: Message) -> None:
     applies_done = s["applies_done"]
     apply_cap = s["apply_daily_cap"]
 
+    scored_line = f"Оценено: {s['total_scored']}" + (f" (pre-filter: {prefilter_count})" if prefilter_count else "")
+
     text = (
         f"📊 Сегодня ({today_str}):\n\n"
         f"Входящие: {s['total_ingested']}\n"
-        f"Оценено: {s['total_scored']}\n"
+        f"{scored_line}\n"
         f"  HH:  {hh_scored}/{hh_cap} {_pbar(hh_scored, hh_cap)}\n"
         f"  TG:  {tg_scored}/{tg_cap} {_pbar(tg_scored, tg_cap)}\n\n"
         f"По решениям:\n"
@@ -265,6 +271,10 @@ async def cmd_stats(message: Message) -> None:
     with get_conn() as conn:
         s = get_today_summary(conn, apply_daily_cap=config.apply_daily_cap)
         pending = get_pending_approvals(conn)
+        pf_row = conn.execute(
+            "SELECT COUNT(*) FROM job_scores WHERE date(scored_at) = date('now') AND model = 'pre_filter'"
+        ).fetchone()
+        prefilter_count = pf_row[0] if pf_row else 0
 
     # Build /today portion
     today_str = date.today().strftime("%d.%m.%Y")
@@ -278,10 +288,12 @@ async def cmd_stats(message: Message) -> None:
     applies_done = s["applies_done"]
     apply_cap = s["apply_daily_cap"]
 
+    scored_line = f"Оценено: {s['total_scored']}" + (f" (pre-filter: {prefilter_count})" if prefilter_count else "")
+
     text = (
         f"📊 Сегодня ({today_str}):\n\n"
         f"Входящие: {s['total_ingested']}\n"
-        f"Оценено: {s['total_scored']}\n"
+        f"{scored_line}\n"
         f"  HH:  {hh_scored}/{hh_cap} {_pbar(hh_scored, hh_cap)}\n"
         f"  TG:  {tg_scored}/{tg_cap} {_pbar(tg_scored, tg_cap)}\n\n"
         f"По решениям:\n"
