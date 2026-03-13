@@ -130,19 +130,63 @@ async def notify_batch_summary(
     skipped: int,
     failed: int,
     manual: int,
+    results: Optional[list] = None,
 ) -> None:
-    """Send a summary notification after a batch cycle completes."""
+    """Send a summary notification after a batch cycle completes.
+
+    When results list is provided, each item should have:
+    {"title": str, "url": str, "status": str, "error": Optional[str]}
+    """
     if done == 0 and skipped == 0 and failed == 0 and manual == 0:
-        return  # Nothing happened — no message
+        return
     try:
         lines = [f"📋 Batch отклики: ✅{done} отправлено"]
-        if skipped:
-            lines.append(f"  ⏩ {skipped} уже откликались")
-        if manual:
-            lines.append(f"  ⚠️ {manual} требуют ручного действия")
-        if failed:
-            lines.append(f"  ❌ {failed} ошибок (повтор до 3 попыток)")
-        await bot.send_message(chat_id, "\n".join(lines))
+
+        if results:
+            done_items = [r for r in results if r.get("status") in ("done", "done_without_letter")]
+            skipped_items = [r for r in results if r.get("status") == "already_applied"]
+            manual_items = [r for r in results if r.get("status") == "manual_required"]
+            failed_items = [r for r in results if r.get("status") in ("failed", "captcha", "session_expired")]
+
+            for r in done_items:
+                title = (r.get("title") or "?")[:60]
+                url = r.get("url") or ""
+                lines.append(f"  ✅ {title}" + (f" ({url})" if url else ""))
+
+            if skipped_items:
+                lines.append(f"  ⏩ {len(skipped_items)} уже откликались:")
+                for r in skipped_items:
+                    title = (r.get("title") or "?")[:60]
+                    url = r.get("url") or ""
+                    lines.append(f"    • {title}" + (f" ({url})" if url else ""))
+
+            if manual_items:
+                lines.append(f"  ⚠️ {len(manual_items)} требуют ручного действия:")
+                for r in manual_items:
+                    title = (r.get("title") or "?")[:60]
+                    url = r.get("url") or ""
+                    lines.append(f"    • {title}" + (f" ({url})" if url else ""))
+
+            if failed_items:
+                lines.append(f"  ❌ {len(failed_items)} ошибок:")
+                for r in failed_items:
+                    title = (r.get("title") or "?")[:60]
+                    err = r.get("error") or ""
+                    lines.append(f"    • {title}" + (f" — {err}" if err else ""))
+        else:
+            # Fallback: counts only (legacy callers)
+            if skipped:
+                lines.append(f"  ⏩ {skipped} уже откликались")
+            if manual:
+                lines.append(f"  ⚠️ {manual} требуют ручного действия")
+            if failed:
+                lines.append(f"  ❌ {failed} ошибок (повтор до 3 попыток)")
+
+        # Truncate to Telegram limit
+        text = "\n".join(lines)
+        if len(text) > 4096:
+            text = text[:4093] + "…"
+        await bot.send_message(chat_id, text)
     except Exception:
         logger.exception("Failed to send batch_summary notification")
 

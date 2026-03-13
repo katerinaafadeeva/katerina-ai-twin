@@ -285,6 +285,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
     skipped_count = 0
     failed_count = 0
     manual_count = 0
+    batch_results: list = []
 
     browser_client = HHBrowserClient()
 
@@ -398,6 +399,12 @@ async def _run_apply_cycle(bot: Bot) -> None:
                     raw_text = task.get("vacancy_text") or ""
                     _title, _company = extract_vacancy_title(raw_text)
                     _title_line = _title + (f" — {_company}" if _company else "")
+                    batch_results.append({
+                        "title": _title_line or task.get("hh_vacancy_id", "?"),
+                        "url": result.apply_url or get_hh_vacancy_url(hh_vacancy_id),
+                        "status": result.status.value,
+                        "error": result.error,
+                    })
                     # Persist to apply log (gitignored JSONL file in logs/)
                     log_apply_event(
                         job_raw_id=job_raw_id,
@@ -422,6 +429,15 @@ async def _run_apply_cycle(bot: Bot) -> None:
 
                 elif result.status == ApplyStatus.ALREADY_APPLIED:
                     skipped_count += 1
+                    raw_text = task.get("vacancy_text") or ""
+                    _title, _company = extract_vacancy_title(raw_text)
+                    _title_line = _title + (f" — {_company}" if _company else "")
+                    batch_results.append({
+                        "title": _title_line or task.get("hh_vacancy_id", "?"),
+                        "url": result.apply_url or get_hh_vacancy_url(hh_vacancy_id),
+                        "status": result.status.value,
+                        "error": result.error,
+                    })
                     # Mark action as skipped so it no longer appears in queue counts.
                     with get_conn() as conn:
                         mark_action_skipped(conn, action_id)
@@ -430,6 +446,15 @@ async def _run_apply_cycle(bot: Bot) -> None:
 
                 elif result.status == ApplyStatus.MANUAL_REQUIRED:
                     manual_count += 1
+                    raw_text = task.get("vacancy_text") or ""
+                    _title, _company = extract_vacancy_title(raw_text)
+                    _title_line = _title + (f" — {_company}" if _company else "")
+                    batch_results.append({
+                        "title": _title_line or task.get("hh_vacancy_id", "?"),
+                        "url": result.apply_url or get_hh_vacancy_url(hh_vacancy_id),
+                        "status": result.status.value,
+                        "error": result.error,
+                    })
                     if chat_id:
                         await notify_manual_required(
                             bot, chat_id, job_raw_id, result.apply_url,
@@ -454,6 +479,15 @@ async def _run_apply_cycle(bot: Bot) -> None:
 
                 elif result.status == ApplyStatus.FAILED:
                     failed_count += 1
+                    raw_text = task.get("vacancy_text") or ""
+                    _title, _company = extract_vacancy_title(raw_text)
+                    _title_line = _title + (f" — {_company}" if _company else "")
+                    batch_results.append({
+                        "title": _title_line or task.get("hh_vacancy_id", "?"),
+                        "url": result.apply_url or get_hh_vacancy_url(hh_vacancy_id),
+                        "status": result.status.value,
+                        "error": result.error,
+                    })
                     # Silent per-vacancy — will retry (up to MAX_ATTEMPTS)
 
                 # --- Anti-ban random delay ---
@@ -474,6 +508,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
             skipped=skipped_count,
             failed=failed_count,
             manual=manual_count,
+            results=batch_results,
         )
 
     logger.info(

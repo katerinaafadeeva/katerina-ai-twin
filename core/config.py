@@ -62,8 +62,8 @@ class Config:
             hh_poll_interval=int(os.getenv("HH_POLL_INTERVAL", "3600")),
             hh_user_agent=os.getenv("HH_USER_AGENT", "KaterinaAITwin/0.1"),
             hh_max_pages=int(os.getenv("HH_MAX_PAGES", "5")),
-            hh_scoring_daily_cap=int(os.getenv("HH_SCORING_DAILY_CAP", "100")),
-            tg_scoring_daily_cap=int(os.getenv("TG_SCORING_DAILY_CAP", "20")),
+            hh_scoring_daily_cap=int(os.getenv("HH_SCORING_DAILY_CAP", "500")),
+            tg_scoring_daily_cap=int(os.getenv("TG_SCORING_DAILY_CAP", "50")),
             hh_searches_path=os.getenv("HH_SEARCHES_PATH", "identity/hh_searches.json"),
             # Cover letter
             cover_letter_daily_cap=int(os.getenv("COVER_LETTER_DAILY_CAP", "50")),

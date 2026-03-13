@@ -129,6 +129,34 @@ def save_score(
     return rowid
 
 
+def get_existing_score_by_hh_vacancy_id(
+    conn: sqlite3.Connection,
+    hh_vacancy_id: str,
+) -> Optional[int]:
+    """Return score if a vacancy with this hh_vacancy_id was already scored.
+
+    Used for cache hits: if the same HH vacancy appears twice (e.g. re-ingested),
+    skip LLM and reuse the previous score.
+
+    Args:
+        conn: Open SQLite connection.
+        hh_vacancy_id: HH.ru vacancy ID string.
+
+    Returns:
+        Integer score, or None if not yet scored.
+    """
+    if not hh_vacancy_id:
+        return None
+    row = conn.execute(
+        """SELECT js.score FROM job_scores js
+           JOIN job_raw jr ON jr.id = js.job_raw_id
+           WHERE jr.hh_vacancy_id = ?
+           ORDER BY js.scored_at DESC LIMIT 1""",
+        (hh_vacancy_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
 def get_score(
     conn: sqlite3.Connection,
     job_raw_id: int,
