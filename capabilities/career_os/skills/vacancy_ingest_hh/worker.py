@@ -82,13 +82,14 @@ async def hh_ingest_worker() -> None:
                         cycle_counts[key] += counts[key]
 
                     logger.info(
-                        "HH search %d/%d done: total=%d new=%d dup=%d filtered=%d",
+                        "HH search %d/%d done: total=%d new=%d dup=%d filtered=%d archived=%d",
                         i + 1,
                         len(queries),
                         counts["total"],
                         counts["new"],
                         counts["duplicate"],
                         counts["filtered"],
+                        counts.get("archived", 0),
                     )
                 except Exception:
                     logger.exception(

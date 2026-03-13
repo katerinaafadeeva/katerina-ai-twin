@@ -51,6 +51,7 @@ from capabilities.career_os.skills.cover_letter.store import (
     get_today_cover_letter_count,
     save_cover_letter,
 )
+from connectors.hh_api import HHApiClient
 from connectors.hh_browser.apply_flow import ApplyStatus, apply_to_vacancy
 from connectors.hh_browser.client import HHBrowserClient
 from core.apply_logger import log_apply_event
@@ -287,6 +288,7 @@ async def _run_apply_cycle(bot: Bot) -> None:
     manual_count = 0
     batch_results: list = []
 
+    hh_api = HHApiClient(user_agent=config.hh_user_agent)
     browser_client = HHBrowserClient()
 
     try:
@@ -298,6 +300,38 @@ async def _run_apply_cycle(bot: Bot) -> None:
                 raw_letter = task.get("cover_letter")
                 cover_letter = raw_letter or ""
                 correlation_id = task.get("correlation_id") or str(uuid4())
+
+                # --- Pre-apply HH API archive check (avoids wasting Playwright on dead vacancies) ---
+                if hh_vacancy_id:
+                    try:
+                        vacancy_detail = await hh_api.get_vacancy(str(hh_vacancy_id))
+                        if vacancy_detail and vacancy_detail.get("archived"):
+                            logger.info(
+                                "Pre-apply check: vacancy %s is archived (HH API) — skipping action_id=%d",
+                                hh_vacancy_id, action_id,
+                            )
+                            finished_at = _now_utc()
+                            vacancy_url = get_hh_vacancy_url(hh_vacancy_id)
+                            with get_conn() as conn:
+                                save_apply_run(
+                                    conn,
+                                    action_id=action_id,
+                                    attempt=task["attempt_count"] + 1,
+                                    status="already_applied",
+                                    error=None,
+                                    apply_url=vacancy_url,
+                                    finished_at=finished_at,
+                                    detected_outcome="vacancy_archived",
+                                )
+                                mark_action_skipped(conn, action_id)
+                                conn.commit()
+                            skipped_count += 1
+                            continue
+                    except Exception:
+                        logger.warning(
+                            "Pre-apply archive check failed for vacancy %s — proceeding with apply",
+                            hh_vacancy_id,
+                        )
 
                 # --- JIT cover letter (COVER_LETTER_MODE=always, default) ---
                 if not cover_letter and config.cover_letter_mode != "never":
